@@ -218,3 +218,13 @@ __marimo__/
 
 # Streamlit
 .streamlit/secrets.toml
+
+# More Than A Hack - restricted competition data
+data/
+cache/
+outputs/
+*.mp4
+
+# Local tracking exports and intermediate data
+*.atd
+*.xml
