@@ -1,7 +1,7 @@
 """Module B. Where the ball is relative to the pitch, and when the match is being played.
 
 The tactical homography is valid on every frame and the ATD is already in pitch coordinates,
-so v1 does not need it. Smart Tagging is not used in v1 (see REPORT.md).
+so v1 does not need it. Smart Tagging is not used in v1 (see Synx.md).
 """
 
 import os

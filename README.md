@@ -31,7 +31,7 @@ The system aims to identify which team controls the ball throughout a match usin
 - NumPy and Pandas
 - Git and GitHub
 
-No machine learning: the pipeline is a fixed rule-based algorithm. Every parameter is justified in `REPORT.md`.
+No machine learning: the pipeline is a fixed rule-based algorithm. Every parameter is justified in `Synx.md`.
 
 ## Project Structure
 
@@ -65,7 +65,7 @@ Synx-more_than_a_hack/
 │
 ├── tests/test_pipeline.py   synthetic-data checks
 ├── run_all.py               writes Synx.csv and validates it
-├── REPORT.md
+├── Synx.md                  technical report (upload to the form)
 ├── games.py
 ├── requirements.txt
 ├── LICENSE

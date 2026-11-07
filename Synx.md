@@ -8,6 +8,8 @@ Fixed rule-based pipeline, no machine learning, no training:
 4. Mark dead ball: outside the two halves, ball beyond a line, or ball unseen for a long time (`synx/pitch.py`, `synx/missing_ball.py`).
 5. A state machine turns control into spells with hysteresis, back-dating each switch to the first control frame; short spells become X (`synx/spells.py`).
 
+**Why this rather than something else.** Rules rather than a learned model, because we have no licensed labelled possession data from other matches, and the provided match may not be used for training or tuning. A rule-based pipeline has a handful of parameters, each with a stated football reason, and is fully deterministic: the same data always gives the same file. It improves on the official baseline (nearest player plus majority smoothing) by requiring the ball to be within reach before anyone controls it, by keeping possession through passes and loose balls, and by detecting dead ball explicitly instead of treating every missing ball as dead.
+
 ## 2. Assets used and dropped
 | Asset | Used? | How / why not |
 |---|---|---|
@@ -27,6 +29,11 @@ Fixed rule-based pipeline, no machine learning, no training:
 - **D**: outside the two halves (published kickoff frames and half ends), ball more than 0.5 m beyond a touchline or goal line, or ball unseen for more than 3 s. D resets possession.
 - **H/A starts or switches**: the other team must control the ball on 12 frames (0.5 s), with no gap longer than 0.5 s between them. The new spell starts at its first control frame. A teammate's pass keeps the spell; a brief opponent touch does not switch it.
 - **X**: live ball with no established possession (e.g. right after a restart), and any spell shorter than 1 s.
+
+Where we drew the line:
+- **Passes and loose balls**: while nobody is within reach, possession stays with the last team that had it. A pass between teammates is one spell.
+- **Challenges and deflections**: an opponent touching the ball is not a turnover. Possession changes only when the opponent keeps the ball within reach for 0.5 s. If both teams are within reach, the nearer player counts.
+- **Restarts**: dead ball ends the spell. After a restart, possession starts once a team has controlled the ball for 0.5 s. The frames before that are X.
 
 ## 5. Parameters
 Every value is set from football reasoning or licensed external data, never from this match's ground truth or video.
@@ -49,5 +56,5 @@ Every value is set from football reasoning or licensed external data, never from
 ## 7. Reproducibility
 See README "Reproduce Synx.csv".
 
-## 8. External training data and licence
-None used.
+## 8. Training data
+None. No labelled data of any kind was used: the pipeline has no trained components. No hand labels, ground truth or human-produced data about the provided game were used.
