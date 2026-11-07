@@ -63,6 +63,7 @@ Synx-more_than_a_hack/
 │   ├── missing_ball.py      (D) gap filling, state carry, confidence
 │   └── spells.py            (E) dead ball, hysteresis, spells, X policy
 │
+├── tests/test_pipeline.py   synthetic-data checks
 ├── run_all.py               writes Synx.csv and validates it
 ├── REPORT.md
 ├── games.py
@@ -124,6 +125,12 @@ python run_all.py
 ```
 
 This writes `Synx.csv` (199,319 rows, `frame,label`) and runs `evaluation/validate_submission.py` on it.
+
+Self-checks on synthetic data (no match data needed):
+
+```bash
+python tests/test_pipeline.py
+```
 
 ### 7. Open in VS Code
 
