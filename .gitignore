@@ -228,3 +228,7 @@ outputs/
 # Local tracking exports and intermediate data
 *.atd
 *.xml
+
+# macOS metadata files (created on external drives)
+._*
+.DS_Store
