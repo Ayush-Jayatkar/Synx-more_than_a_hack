@@ -63,6 +63,7 @@ Synx-more_than_a_hack/
 │   ├── missing_ball.py      (D) gap filling, state carry, confidence
 │   └── spells.py            (E) dead ball, hysteresis, spells, X policy
 │
+├── docs/WORKSTREAM1.md      data & tracking handoff
 ├── tests/test_pipeline.py   synthetic-data checks
 ├── run_all.py               writes Synx.csv and validates it
 ├── Synx.md                  technical report (upload to the form)
@@ -125,6 +126,8 @@ python run_all.py
 ```
 
 This writes `Synx.csv` (199,319 rows, `frame,label`) and runs `evaluation/validate_submission.py` on it.
+
+The first run parses the tracking file and caches it in `cache/` (gitignored); later runs are fast.
 
 Self-checks on synthetic data (no match data needed):
 
