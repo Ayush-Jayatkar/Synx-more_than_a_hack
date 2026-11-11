@@ -31,7 +31,7 @@ The system aims to identify which team controls the ball throughout a match usin
 - NumPy and Pandas
 - Git and GitHub
 
-No machine learning: the pipeline is a fixed rule-based algorithm. Every parameter is justified in `REPORT.md`.
+No machine learning: the pipeline is a fixed rule-based algorithm. Every parameter is justified in `Synx.md`.
 
 ## Project Structure
 
@@ -63,9 +63,10 @@ Synx-more_than_a_hack/
 │   ├── missing_ball.py      (D) gap filling, state carry, confidence
 │   └── spells.py            (E) dead ball, hysteresis, spells, X policy
 │
+├── docs/WORKSTREAM1.md      data & tracking handoff
 ├── tests/test_pipeline.py   synthetic-data checks
 ├── run_all.py               writes Synx.csv and validates it
-├── REPORT.md
+├── Synx.md                  technical report (upload to the form)
 ├── games.py
 ├── requirements.txt
 ├── LICENSE
@@ -125,6 +126,8 @@ python run_all.py
 ```
 
 This writes `Synx.csv` (199,319 rows, `frame,label`) and runs `evaluation/validate_submission.py` on it.
+
+The first run parses the tracking file and caches it in `cache/` (gitignored); later runs are fast.
 
 Self-checks on synthetic data (no match data needed):
 

@@ -13,20 +13,51 @@ from synx.data import AWAY, HOME, NOBODY  # noqa: E402
 PITCH = (100.0, 50.0)
 
 
-def test_parse_and_team():
-    folder = tempfile.mkdtemp()
-    meta, raw = os.path.join(folder, "m.xml"), os.path.join(folder, "r.txt")
+def _fake_files(folder):
+    tactical = os.path.join(folder, "tactical")
+    os.makedirs(tactical)
+    meta = os.path.join(tactical, "BAR-ATH_tactical_atd.xml")
+    raw = os.path.join(tactical, "BAR-ATH_tactical_atd.txt")
     with open(meta, "w") as f:
         f.write('<x><Team id="t1"><Name>Home FC</Name></Team><Team id="t2"><Name>Away FC</Name></Team>'
                 '<Player teamId="t1"/><Player teamId="t2"/></x>')
     with open(raw, "w") as f:
         f.write("1:0.5,0.5,1.0;0.6,0.5,2.0:0.51,0.5,0.0\n")
         f.write("2:NaN,NaN,NaN;0.6,0.5,2.0:NaN,NaN,NaN\n")
+    return meta, raw
+
+
+def test_parse_and_team():
+    meta, raw = _fake_files(tempfile.mkdtemp())
     team = data.team_of_each_track(meta)
     assert list(team) == [HOME, AWAY]
-    ball, players = data.parse_atd(raw, 2, 3, PITCH)
+    ball, players, speed = data.parse_atd(raw, 2, 3, PITCH)
     assert np.allclose(ball[0], [51.0, 25.0]) and np.isnan(ball[1]).all() and np.isnan(ball[2]).all()
     assert np.allclose(players[0, 1], [60.0, 25.0]) and np.isnan(players[1, 0]).all()
+    assert np.allclose(speed[0], [1.0, 2.0]) and np.isnan(speed[1, 0]) and speed[1, 1] == 2.0
+
+
+def test_ball_speed():
+    ball = np.array([[0, 0], [0.4, 0.3], [np.nan, np.nan], [1, 1]], dtype=np.float32)
+    v = data.ball_speed(ball)
+    assert np.isnan(v[0]) and np.isclose(v[1], 0.5 * data.FPS) and np.isnan(v[2]) and np.isnan(v[3])
+
+
+def test_load_cache_and_check():
+    folder = tempfile.mkdtemp()
+    meta, raw = _fake_files(folder)
+    cache_dir = os.path.join(folder, "cache")
+    first = data.load(data_dir=folder, cache_dir=cache_dir)
+    assert os.path.isfile(os.path.join(cache_dir, "BAR-ATH_tracking.npz"))
+    second = data.load(data_dir=folder, cache_dir=cache_dir)
+    for name in ("ball", "players", "player_speed", "team", "ball_speed"):
+        assert np.array_equal(first[name], second[name], equal_nan=True), name
+    with open(raw, "a") as f:  # changed source file must invalidate the cache
+        f.write("3:0.1,0.1,0.0;0.2,0.2,0.0:0.1,0.1\n")
+    assert not np.isnan(data.load(data_dir=folder, cache_dir=cache_dir)["ball"][2]).any()
+    stats = data.check(first, np.arange(3))
+    assert stats["frames"] == 3 and stats["home_slots"] == 1 and stats["away_slots"] == 1
+    assert np.isclose(stats["ball_seen_pct"], 33.3) and stats["longest_ball_gap_s"] == 0.1
 
 
 def test_control():
