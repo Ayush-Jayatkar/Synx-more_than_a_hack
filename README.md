@@ -1,6 +1,6 @@
 # Synx-more_than_a_hack
 
-**Football Possession Prediction Using Tracking Data and Temporal Modelling**
+**Football Possession Prediction Using Tracking Data and Rule-Based Temporal Smoothing**
 
 ## About the Project
 
@@ -13,7 +13,7 @@ The system aims to identify which team controls the ball throughout a match usin
 - Predict team possession at every frame.
 - Identify possession changes and dead-ball situations.
 - Handle missing and noisy tracking observations.
-- Apply temporal modelling to improve prediction consistency.
+- Apply rule-based temporal smoothing (hysteresis, minimum spell length) for consistent predictions.
 - Develop a reliable and reproducible prediction pipeline.
 
 ### Prediction Classes
@@ -29,12 +29,9 @@ The system aims to identify which team controls the ball throughout a match usin
 
 - Python
 - NumPy and Pandas
-- SciPy
-- Scikit-learn
-- Jupyter Notebook
 - Git and GitHub
 
-Additional libraries may be introduced as development progresses.
+No machine learning: the pipeline is a fixed rule-based algorithm. Every parameter is justified in `Synx.md`.
 
 ## Project Structure
 
@@ -59,6 +56,17 @@ Synx-more_than_a_hack/
 │   ├── make_dummy_submission.py
 │   └── utils.py
 │
+├── synx/
+│   ├── data.py              (A) tracking -> per-frame table
+│   ├── pitch.py             (B) homography, pitch coords, Smart Tagging
+│   ├── ball_possession.py   (C) nearest player, distances, control
+│   ├── missing_ball.py      (D) gap filling, state carry, confidence
+│   └── spells.py            (E) dead ball, hysteresis, spells, X policy
+│
+├── docs/WORKSTREAM1.md      data & tracking handoff
+├── tests/test_pipeline.py   synthetic-data checks
+├── run_all.py               writes Synx.csv and validates it
+├── Synx.md                  technical report (upload to the form)
 ├── games.py
 ├── requirements.txt
 ├── LICENSE
@@ -104,7 +112,30 @@ python -m pip install --upgrade pip
 pip install -r requirements.txt
 ```
 
-### 5. Open in VS Code
+### 5. Point to the data (not in this repo)
+
+```bash
+export MTAH_DATA_DIR=/path/to/data      # macOS / Linux
+$env:MTAH_DATA_DIR = "D:\\data"         # Windows PowerShell
+```
+
+### 6. Reproduce Synx.csv
+
+```bash
+python run_all.py
+```
+
+This writes `Synx.csv` (199,319 rows, `frame,label`) and runs `evaluation/validate_submission.py` on it.
+
+The first run parses the tracking file and caches it in `cache/` (gitignored); later runs are fast.
+
+Self-checks on synthetic data (no match data needed):
+
+```bash
+python tests/test_pipeline.py
+```
+
+### 7. Open in VS Code
 
 ```bash
 code .
@@ -112,19 +143,23 @@ code .
 
 ## Git Workflow
 
-**Pull latest changes:**
+One branch per person, merged by pull request. Don't edit another person's module without telling them.
 
 ```bash
-git pull origin main
-```
-
-**Save and push changes:**
-
-```bash
-git add .
+git checkout main && git pull origin main
+git checkout -b your-name/module
+git add synx/your_module.py
 git commit -m "Describe your changes"
-git push origin main
+git push origin your-name/module      # then open a PR
 ```
+
+## Competition Rules (read before coding)
+
+- Match data is **input only**. Never train, fit or tune on the ground truth or the video.
+- Never compare our output with the video, and never hand-label frames.
+- The public 5-min ground truth is only for checking the pipeline runs.
+- Never paste or upload match data, screenshots or extracts into AI tools.
+- `data/`, videos, `.atd` and `.xml` files are git-ignored. Keep it that way.
 
 ---
 
