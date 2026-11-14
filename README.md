@@ -64,8 +64,8 @@ Synx-more_than_a_hack/
 │   └── spells.py            (E) dead ball, hysteresis, spells, X policy
 │
 ├── docs/WORKSTREAM1.md      data & tracking handoff
-├── tests/test_pipeline.py   synthetic-data checks
-├── run_all.py               writes Synx.csv and validates it
+├── tests/                    synthetic-data checks
+├── run_all.py               inference, diagnostics and format validation
 ├── Synx.md                  technical report (upload to the form)
 ├── games.py
 ├── requirements.txt
@@ -122,10 +122,12 @@ $env:MTAH_DATA_DIR = "D:\\data"         # Windows PowerShell
 ### 6. Reproduce Synx.csv
 
 ```bash
-python run_all.py
+python run_all.py --chunk-size 4096 --smart-tagging
 ```
 
-This writes `Synx.csv` (199,319 rows, `frame,label`) and runs `evaluation/validate_submission.py` on it.
+This writes `outputs/workstream2/Synx.csv` (199,319 rows, `frame,label`), runs the format validator,
+and saves local comparison, benchmark and frame-level diagnostics under `outputs/workstream2/`.
+Use `--overwrite` only when intentionally replacing that output. Local outputs and caches are ignored by Git.
 
 The first run parses the tracking file and caches it in `cache/` (gitignored); later runs are fast.
 
@@ -133,6 +135,8 @@ Self-checks on synthetic data (no match data needed):
 
 ```bash
 python tests/test_pipeline.py
+python tests/test_possession_features.py
+python tests/test_streaming.py
 ```
 
 ### 7. Open in VS Code
