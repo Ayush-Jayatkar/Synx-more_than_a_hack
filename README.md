@@ -31,7 +31,15 @@ The system aims to identify which team controls the ball throughout a match usin
 - NumPy and Pandas
 - Git and GitHub
 
-No machine learning: the pipeline is a fixed rule-based algorithm. Every parameter is justified in `Synx.md`.
+No machine learning: the final pipeline combines tracking-derived evidence with a temporal possession state machine.
+
+## Architecture
+
+`run_all.py` is the final submission-generation pipeline. It loads tracking data, derives the default dead-ball mask, and feeds the Workstream 2 features and possession evidence into the chunked streaming state machine. That engine handles possession switches, missing-ball abstention, and spell continuity, then writes one `H`, `A`, `D`, or `X` label per frame in the official `frame,label` format. The default output is `outputs/workstream2/Synx.csv`; chunk size is configurable, and existing outputs are protected unless `--overwrite` is supplied. Optional Smart Tagging context produces a local diagnostics sidecar and does not change predictions.
+
+Validate a generated CSV separately with `python synx_validate.py <submission.csv>`. This wrapper calls the official format validator in `evaluation/validate_submission.py`; validation does not use ground truth. `modules/synx_combined.py` is a separately tested H/A/D probability adapter for the advanced evidence and is not used by the final submission pipeline. `interfaces.py` defines the optional module contract, probability normalization and validation, and probability blending; `modules/registry.py` provides a small registry for constructing the advanced adapter or optional baseline. These helpers are for independent module evaluation and are not wired into `run_all.py`.
+
+`starter/baseline.py` is the original nearest-player reference. `modules/nearest_player.py` adapts that optional baseline to the shared module contract for synthetic/offline comparisons; neither baseline is the final prediction algorithm or used by `run_all.py`.
 
 ## Project Structure
 
@@ -39,32 +47,31 @@ No machine learning: the pipeline is a fixed rule-based algorithm. Every paramet
 Synx-more_than_a_hack/
 │
 ├── evaluation/
-│   ├── gt/
 │   ├── results/
 │   ├── possession_metrics.py
 │   ├── run_evaluation.py
 │   └── validate_submission.py
 │
 ├── starter/
-│   ├── 01_smart_tagging.ipynb
-│   ├── 02_tracking_atd.ipynb
-│   ├── 03_first_submission.ipynb
-│   ├── baseline.py
-│   ├── load_atd.py
-│   ├── load_homography.py
-│   ├── load_smart_tagging.py
-│   ├── make_dummy_submission.py
-│   └── utils.py
+│   └── baseline.py          optional nearest-player reference
 │
 ├── synx/
-│   ├── data.py              (A) tracking -> per-frame table
-│   ├── pitch.py             (B) homography, pitch coords, Smart Tagging
-│   ├── ball_possession.py   (C) nearest player, distances, control
-│   ├── missing_ball.py      (D) gap filling, state carry, confidence
-│   └── spells.py            (E) dead ball, hysteresis, spells, X policy
+│   ├── data.py              tracking input and cache
+│   ├── pitch.py             pitch geometry and in-play windows
+│   ├── possession_features.py distance, movement, and spatial features
+│   ├── approaches.py        possession evidence
+│   ├── possession.py        prediction API and dead-ball handling
+│   ├── spells.py            temporal state machine and spell handling
+│   ├── streaming.py         stateful chunk processing
+│   ├── events.py            optional event-context alignment
+│   └── diagnostics.py       local diagnostic reports
 │
-├── docs/WORKSTREAM1.md      data & tracking handoff
-├── tests/                    synthetic-data checks
+├── interfaces.py            shared module contract and probability helpers
+├── modules/
+│   ├── registry.py          optional module registry
+│   ├── nearest_player.py    optional nearest-player baseline
+│   └── synx_combined.py     H/A/D probability adapter
+├── tests/                    synthetic feature, probability, and streaming checks
 ├── run_all.py               inference, diagnostics and format validation
 ├── Synx.md                  technical report (upload to the form)
 ├── games.py
@@ -125,17 +132,20 @@ $env:MTAH_DATA_DIR = "D:\\data"         # Windows PowerShell
 python run_all.py --chunk-size 4096 --smart-tagging
 ```
 
-This writes `outputs/workstream2/Synx.csv` (199,319 rows, `frame,label`), runs the format validator,
-and saves local comparison, benchmark and frame-level diagnostics under `outputs/workstream2/`.
-Use `--overwrite` only when intentionally replacing that output. Local outputs and caches are ignored by Git.
+This writes `outputs/workstream2/Synx.csv` (`frame,label`) and, with `--smart-tagging`,
+a frame-level diagnostics sidecar under `outputs/workstream2/`. Validate the CSV separately
+with `python synx_validate.py outputs/workstream2/Synx.csv`. Use `--overwrite` only when
+intentionally replacing an existing output. Local outputs and caches are ignored by Git.
 
 The first run parses the tracking file and caches it in `cache/` (gitignored); later runs are fast.
 
 Self-checks on synthetic data (no match data needed):
 
 ```bash
+python tests/test_data.py
 python tests/test_pipeline.py
 python tests/test_possession_features.py
+python tests/test_probability_module.py
 python tests/test_streaming.py
 ```
 
@@ -168,4 +178,3 @@ git push origin your-name/module      # then open a PR
 ---
 
 **Team Synx**
-

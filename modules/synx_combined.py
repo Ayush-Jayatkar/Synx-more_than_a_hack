@@ -1,13 +1,14 @@
 """Synx H/A/D probabilities with explicit, chunk-safe feature context."""
 import numpy as np
 
+from interfaces import PossessionModule
 from synx import approaches, pitch, possession_features
 from synx.ball_possession import enhanced_scores
 from synx.data import AWAY, HOME, FPS
 from synx.possession_features import DEFAULT_CONTROL_RADIUS_M
 
 
-class SynxCombined:
+class SynxCombined(PossessionModule):
     """Convert Workstream 2 evidence to normalized H/A/D probabilities.
 
     ``predict_proba`` processes a complete sequence from absolute frame zero.
