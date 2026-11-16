@@ -50,6 +50,24 @@ def test_incremental_machine_matches_offline_and_backdates():
     assert (expected[30:50] == "A").all()
 
 
+def test_pending_gap_transition_survives_chunk_boundary():
+    ctrl = np.array([HOME] * 20 + [AWAY] * 5 + [NOBODY] + [AWAY] * 7)
+    dead = np.zeros(len(ctrl), dtype=bool)
+    seen = np.ones(len(ctrl), dtype=bool)
+    seen[25] = False
+    expected = spells.label_frames(ctrl, dead, seen)
+
+    machine = spells.PossessionStateMachine()
+    emitted = []
+    for start, end in ((0, 25), (25, 26), (26, len(ctrl))):
+        _, labels = machine.feed(ctrl[start:end], dead[start:end], seen[start:end])
+        emitted.append(labels)
+    _, tail = machine.finish()
+    emitted.append(tail)
+
+    assert np.array_equal(np.concatenate(emitted), expected)
+
+
 def test_features_identical_across_chunk_boundaries():
     track = synthetic_track()
     expected = possession_features.build_features(track)
@@ -175,6 +193,55 @@ def test_synthetic_submission_passes_official_format_validator():
     result = subprocess.run([sys.executable, validator, path, "--rows", "4"],
                             capture_output=True, text=True)
     assert result.returncode == 0, "synthetic submission should validate"
+
+
+def test_runner_parses_streaming_and_output_arguments():
+    args = run_all.build_parser().parse_args([
+        "--chunk-size", "17", "--smart-tagging", "--output", "nested/result.csv",
+        "--overwrite",
+    ])
+    assert args.chunk_size == 17
+    assert args.smart_tagging is True
+    assert args.output == "nested/result.csv"
+    assert args.overwrite is True
+
+
+def test_runner_writes_nested_requested_path_and_requires_overwrite():
+    track = synthetic_track(18)
+    del track["pitch"]
+    folder = tempfile.mkdtemp()
+    path = os.path.join(folder, "nested", "submission.csv")
+
+    labels = run_all.run(track, path, chunk_size=3)
+    assert os.path.isfile(path)
+    with open(path, encoding="utf-8") as handle:
+        rows = handle.read().splitlines()
+    assert rows[0] == "frame,label"
+    assert len(rows) == len(labels) + 1
+    assert rows[1].startswith("0,")
+
+    try:
+        run_all.run(track, path, chunk_size=3)
+    except FileExistsError:
+        pass
+    else:
+        raise AssertionError("existing output must require --overwrite")
+    assert np.array_equal(run_all.run(track, path, chunk_size=3, overwrite=True), labels)
+
+
+def test_runner_event_context_is_diagnostic_only():
+    track = synthetic_track(12)
+    del track["pitch"]
+    folder = tempfile.mkdtemp()
+    path = os.path.join(folder, "submission.csv")
+    context = events.align_events([
+        {"start_frame": 2, "end_frame": 5, "code": "SET PIECES", "tags": {}},
+    ], len(track["ball"]))
+
+    labels = run_all.run(track, path, chunk_size=4, event_context=context)
+    assert os.path.isfile(path)
+    assert os.path.isfile(os.path.join(folder, "frame_diagnostics.csv"))
+    assert np.array_equal(labels, run_all.predict(track, chunk_size=4))
 
 
 if __name__ == "__main__":

@@ -3,6 +3,8 @@ import numpy as np
 from synx.data import AWAY, HOME, NOBODY
 FPS = 25
 SWITCH_CONTROL_FRAMES = int(0.5 * FPS)
+PENDING_GAP_FRAMES = 1
+MISSING_BALL_GRACE_FRAMES = FPS
 MIN_SPELL_FRAMES = FPS
 LETTER = {HOME: "H", AWAY: "A", None: "X"}
 
@@ -16,13 +18,25 @@ class PossessionStateMachine:
     emitted with the prior state (or X before possession is established).
     """
 
-    def __init__(self, switch_frames=SWITCH_CONTROL_FRAMES):
+    def __init__(self, switch_frames=SWITCH_CONTROL_FRAMES,
+                 pending_gap_frames=PENDING_GAP_FRAMES,
+                 missing_ball_grace_frames=MISSING_BALL_GRACE_FRAMES):
         if not isinstance(switch_frames, (int, np.integer)) or switch_frames < 1:
             raise ValueError("switch_frames must be a positive integer")
+        if (not isinstance(pending_gap_frames, (int, np.integer))
+                or pending_gap_frames < 0):
+            raise ValueError("pending_gap_frames must be a nonnegative integer")
+        if (not isinstance(missing_ball_grace_frames, (int, np.integer))
+                or missing_ball_grace_frames < 0):
+            raise ValueError("missing_ball_grace_frames must be a nonnegative integer")
         self.switch_frames = int(switch_frames)
+        self.pending_gap_frames = int(pending_gap_frames)
+        self.missing_ball_grace_frames = int(missing_ball_grace_frames)
         self.state = None
         self.pending = None
         self.pending_count = 0
+        self.pending_gap_count = 0
+        self.missing_ball_frames = 0
         self._pending_labels = []
         self._input_frames = 0
         self._output_frames = 0
@@ -34,6 +48,7 @@ class PossessionStateMachine:
             self._pending_labels.clear()
         self.pending = None
         self.pending_count = 0
+        self.pending_gap_count = 0
 
     def feed(self, ctrl, dead, ball_seen):
         """Consume aligned arrays; return ``(first_output_frame, labels)``."""
@@ -54,9 +69,31 @@ class PossessionStateMachine:
                 self._flush_pending(LETTER[self.state], output)
                 output.append("D")
                 self.state = None
+                self.missing_ball_frames = 0
                 continue
 
-            current = int(code) if seen else NOBODY
+            if not seen:
+                self.missing_ball_frames += 1
+                if self.pending is not None:
+                    # A short tracking gap may bridge continuous opponent evidence,
+                    # but does not itself count as control for switch confirmation.
+                    self.pending_gap_count += 1
+                    self._pending_labels.append(None)
+                    if self.pending_gap_count <= self.pending_gap_frames:
+                        continue
+                    self._flush_pending(LETTER[self.state], output)
+                    continue
+                if (self.state is not None
+                        and self.missing_ball_frames <= self.missing_ball_grace_frames):
+                    output.append(LETTER[self.state])
+                else:
+                    # Missing tracking is uncertainty, never dead-ball evidence.
+                    self.state = None
+                    output.append("X")
+                continue
+
+            self.missing_ball_frames = 0
+            current = int(code)
             if current == NOBODY or current == self.state:
                 self._flush_pending(LETTER[self.state], output)
                 output.append(LETTER[self.state])
@@ -65,6 +102,7 @@ class PossessionStateMachine:
             if current != self.pending:
                 self._flush_pending(LETTER[self.state], output)
                 self.pending = current
+            self.pending_gap_count = 0
             self.pending_count += 1
             self._pending_labels.append(current)
             if self.pending_count >= self.switch_frames:
@@ -93,15 +131,23 @@ class PossessionStateMachine:
         return first, np.asarray(output, dtype="<U1")
 
 
-def label_frames(ctrl, dead, ball_seen, switch_frames=SWITCH_CONTROL_FRAMES):
+def label_frames(ctrl, dead, ball_seen, switch_frames=SWITCH_CONTROL_FRAMES,
+                 pending_gap_frames=PENDING_GAP_FRAMES,
+                 missing_ball_grace_frames=MISSING_BALL_GRACE_FRAMES):
     """Return H/A/D/X labels. ``dead`` is explicit evidence from integration.
 
     Sustained team evidence establishes or switches possession; a confirmed
-    switch is backdated. NOBODY, unseen ball and brief opposing touches preserve
-    established possession but reset pending switch evidence. With no state
-    they remain X. Dead frames are D and reset state. No short spell is erased.
+    switch is backdated. NOBODY and brief opposing touches preserve established
+    possession. A short unseen gap may bridge a pending switch without adding
+    control evidence; a long unseen run decays to X rather than D. With no
+    state, uncertainty remains X. Dead frames are D and reset state. No short
+    spell is erased.
     """
-    machine = PossessionStateMachine(switch_frames=switch_frames)
+    machine = PossessionStateMachine(
+        switch_frames=switch_frames,
+        pending_gap_frames=pending_gap_frames,
+        missing_ball_grace_frames=missing_ball_grace_frames,
+    )
     _, emitted = machine.feed(ctrl, dead, ball_seen)
     _, tail = machine.finish()
     return np.concatenate((emitted, tail))

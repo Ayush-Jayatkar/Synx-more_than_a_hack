@@ -26,10 +26,15 @@ class StreamingPossessionEngine:
     """Incremental combined predictor with exact chunk-boundary continuity."""
 
     def __init__(self, feature_kwargs=None, control_kwargs=None, switch_frames=13,
-                 approach="E_combined"):
+                 approach="E_combined", pending_gap_frames=1,
+                 missing_ball_grace_frames=25):
         self.feature_kwargs = dict(feature_kwargs or {})
         self.control_kwargs = dict(control_kwargs or {})
-        self.machine = spells.PossessionStateMachine(switch_frames=switch_frames)
+        self.machine = spells.PossessionStateMachine(
+            switch_frames=switch_frames,
+            pending_gap_frames=pending_gap_frames,
+            missing_ball_grace_frames=missing_ball_grace_frames,
+        )
         self.approach = approach
         self.feature_state = None
         self.input_frames = 0
@@ -75,7 +80,8 @@ class StreamingPossessionEngine:
 
 def iter_track_chunks(track, dead, chunk_size=4096, feature_kwargs=None,
                       control_kwargs=None, switch_frames=13,
-                      approach="E_combined"):
+                      approach="E_combined", pending_gap_frames=1,
+                      missing_ball_grace_frames=25):
     """Yield ``(start_frame, labels, StreamOutput)`` across any chunk size."""
     ball = np.asarray(track["ball"])
     dead = np.asarray(dead, dtype=bool)
@@ -86,7 +92,8 @@ def iter_track_chunks(track, dead, chunk_size=4096, feature_kwargs=None,
     if not isinstance(chunk_size, (int, np.integer)) or chunk_size < 1:
         raise ValueError("chunk_size must be a positive integer")
     engine = StreamingPossessionEngine(
-        feature_kwargs, control_kwargs, switch_frames, approach
+        feature_kwargs, control_kwargs, switch_frames, approach,
+        pending_gap_frames, missing_ball_grace_frames,
     )
     feature_keys = ("ball", "players", "player_speed", "team", "ball_speed")
     for start in range(0, len(ball), chunk_size):
@@ -103,14 +110,16 @@ def iter_track_chunks(track, dead, chunk_size=4096, feature_kwargs=None,
 
 def predict_chunked(track, dead, chunk_size=4096, feature_kwargs=None,
                     control_kwargs=None, switch_frames=13,
-                    approach="E_combined"):
+                    approach="E_combined", pending_gap_frames=1,
+                    missing_ball_grace_frames=25):
     """Collect a complete deterministic label array from the streaming engine."""
     n = len(track["ball"])
     labels = np.empty(n, dtype="<U1")
     written = np.zeros(n, dtype=bool)
     for start, chunk_labels, _ in iter_track_chunks(
             track, dead, chunk_size, feature_kwargs, control_kwargs,
-            switch_frames, approach):
+            switch_frames, approach, pending_gap_frames,
+            missing_ball_grace_frames):
         labels[start:start + len(chunk_labels)] = chunk_labels
         written[start:start + len(chunk_labels)] = True
     if not written.all():
@@ -120,7 +129,8 @@ def predict_chunked(track, dead, chunk_size=4096, feature_kwargs=None,
 
 def simulate_realtime(track, dead, frame_limit=None, pace=True, fps=25,
                       feature_kwargs=None, control_kwargs=None,
-                      switch_frames=13):
+                      switch_frames=13, pending_gap_frames=1,
+                      missing_ball_grace_frames=25):
     """Feed one frame at a time, optionally pacing calls to the target frame rate.
 
     Returns labels and timing diagnostics. ``frame_limit`` is useful for a
@@ -134,7 +144,9 @@ def simulate_realtime(track, dead, frame_limit=None, pace=True, fps=25,
     if dead.shape != (n,):
         raise ValueError("dead must have one boolean per input frame")
     engine = StreamingPossessionEngine(
-        feature_kwargs, control_kwargs, switch_frames
+        feature_kwargs, control_kwargs, switch_frames,
+        pending_gap_frames=pending_gap_frames,
+        missing_ball_grace_frames=missing_ball_grace_frames,
     )
     keys = ("ball", "players", "player_speed", "team", "ball_speed")
     labels = []

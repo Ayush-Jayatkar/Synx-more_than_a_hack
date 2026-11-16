@@ -44,19 +44,22 @@ def control(d_home, d_away, radius=CONTROL_RADIUS_M, contest_margin=0.4):
     return out
 
 
-def enhanced_control(features, radius=CONTROL_RADIUS_M, contest_margin=0.4,
-                     competition_penalty_m=0.25, approach_weight=0.05,
-                     speed_uncertainty_m_per_mps=0.02, max_uncertainty_m=1.0):
-    """Estimate control from per-frame tactical features, returning codes.
+def enhanced_scores(features, radius=CONTROL_RADIUS_M, contest_margin=0.4,
+                    competition_penalty_m=0.25, approach_weight=0.05,
+                    speed_uncertainty_m_per_mps=0.02, max_uncertainty_m=1.0,
+                    opponent_pressure_penalty_m=0.15,
+                    second_support_radius_m=3.0,
+                    speed_mismatch_penalty_m_per_mps=0.02):
+    """Return Approach E's continuous home/away scores and contest margin.
 
-    A team must have a nearby player. The score is nearest distance plus a
-    per-extra-nearby-player competition penalty, minus a small bounded credit
-    for aggregate approach evidence. Fast ball movement expands the contest
-    margin (uncertainty), capped in metres. All parameters are physical
-    heuristic scales, not tuned or claimed optimal.
+    Lower scores indicate stronger evidence. This is the shared implementation
+    used by both hard-control inference and the probability adapter, preventing
+    their combined-evidence formulas from drifting apart.
     """
     params = (radius, contest_margin, competition_penalty_m, approach_weight,
-              speed_uncertainty_m_per_mps, max_uncertainty_m)
+              speed_uncertainty_m_per_mps, max_uncertainty_m,
+              opponent_pressure_penalty_m, second_support_radius_m,
+              speed_mismatch_penalty_m_per_mps)
     if any(not np.isfinite(x) or x < 0 for x in params):
         raise ValueError("all thresholds must be finite and nonnegative")
     def arr(name):
@@ -64,15 +67,55 @@ def enhanced_control(features, radius=CONTROL_RADIUS_M, contest_margin=0.4,
             raise ValueError("Missing feature: " + name)
         return np.asarray(features[name], dtype=float)
     hn, an = arr("home_nearest_distance"), arr("away_nearest_distance")
+    hsecond, asecond = arr("home_second_distance"), arr("away_second_distance")
     hc, ac = arr("home_players_nearby"), arr("away_players_nearby")
-    hs, ass = arr("home_approach_speed"), arr("away_approach_speed")
+    happ, aapp = arr("home_approach_speed"), arr("away_approach_speed")
+    hspeed, aspeed = arr("home_nearest_speed"), arr("away_nearest_speed")
     bs = arr("ball_speed")
-    if any(x.ndim != 1 or x.shape != hn.shape for x in (an, hc, ac, hs, ass, bs)):
+    if any(x.ndim != 1 or x.shape != hn.shape for x in
+           (an, hsecond, asecond, hc, ac, happ, aapp, hspeed, aspeed, bs)):
         raise ValueError("control features must be aligned one-dimensional arrays")
-    hscore = hn + competition_penalty_m * np.maximum(hc - 1, 0) - approach_weight * np.clip(np.nan_to_num(hs, nan=0.0, posinf=0.0, neginf=0.0), 0, 5)
-    ascore = an + competition_penalty_m * np.maximum(ac - 1, 0) - approach_weight * np.clip(np.nan_to_num(ass, nan=0.0, posinf=0.0, neginf=0.0), 0, 5)
-    uncertainty = np.minimum(np.nan_to_num(bs, nan=0.0, posinf=0.0), 50.0) * speed_uncertainty_m_per_mps
+    home_support = np.maximum(hc - 1, 0)
+    away_support = np.maximum(ac - 1, 0)
+    home_support = np.maximum(home_support,
+                              np.isfinite(hsecond) & (hsecond <= second_support_radius_m))
+    away_support = np.maximum(away_support,
+                              np.isfinite(asecond) & (asecond <= second_support_radius_m))
+    home_support = np.clip(home_support, 0, 2)
+    away_support = np.clip(away_support, 0, 2)
+    ball_motion = np.minimum(np.nan_to_num(bs, nan=0.0, posinf=50.0, neginf=0.0), 50.0)
+    home_speed_deficit = np.where(np.isfinite(hspeed) & np.isfinite(bs),
+                                  np.maximum(ball_motion - hspeed, 0.0), 0.0)
+    away_speed_deficit = np.where(np.isfinite(aspeed) & np.isfinite(bs),
+                                  np.maximum(ball_motion - aspeed, 0.0), 0.0)
+    hscore = (hn - competition_penalty_m * home_support
+              + opponent_pressure_penalty_m * np.clip(ac, 0, 3)
+              - approach_weight * np.clip(np.nan_to_num(happ, nan=0.0, posinf=0.0, neginf=0.0), 0, 5)
+              + speed_mismatch_penalty_m_per_mps * np.clip(home_speed_deficit, 0, 20))
+    ascore = (an - competition_penalty_m * away_support
+              + opponent_pressure_penalty_m * np.clip(hc, 0, 3)
+              - approach_weight * np.clip(np.nan_to_num(aapp, nan=0.0, posinf=0.0, neginf=0.0), 0, 5)
+              + speed_mismatch_penalty_m_per_mps * np.clip(away_speed_deficit, 0, 20))
+    uncertainty = ball_motion * speed_uncertainty_m_per_mps
     margin = contest_margin + np.minimum(uncertainty, max_uncertainty_m)
+    return hscore, ascore, margin
+
+
+def enhanced_control(features, radius=CONTROL_RADIUS_M, contest_margin=0.4,
+                     competition_penalty_m=0.25, approach_weight=0.05,
+                     speed_uncertainty_m_per_mps=0.02, max_uncertainty_m=1.0,
+                     opponent_pressure_penalty_m=0.15,
+                     second_support_radius_m=3.0,
+                     speed_mismatch_penalty_m_per_mps=0.02):
+    """Estimate control from Approach E's combined frame-local evidence."""
+    hscore, ascore, margin = enhanced_scores(
+        features, radius, contest_margin, competition_penalty_m,
+        approach_weight, speed_uncertainty_m_per_mps, max_uncertainty_m,
+        opponent_pressure_penalty_m, second_support_radius_m,
+        speed_mismatch_penalty_m_per_mps,
+    )
+    hn = np.asarray(features["home_nearest_distance"], dtype=float)
+    an = np.asarray(features["away_nearest_distance"], dtype=float)
     out = np.full(hn.shape, NOBODY, dtype=np.int8)
     out[(hn <= radius) & (hscore + margin < ascore)] = HOME
     out[(an <= radius) & (ascore + margin < hscore)] = AWAY

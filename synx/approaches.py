@@ -62,21 +62,24 @@ def movement_based(features, radius=2.0, contest_margin=0.4,
 
 
 def spatial_based(features, radius=2.0, contest_margin=0.4,
-                  teammate_penalty=0.25, pressure_margin_per_player=0.1):
+                  teammate_support_credit=0.25, opponent_pressure_penalty=0.15,
+                  pressure_margin_per_player=0.1):
     """Approach C: nearest distance adjusted for teammate density and pressure.
 
-    Each additional nearby teammate adds ``teammate_penalty`` metres to its
-    team's distance score; nearby players from both teams increase the margin
-    needed to call control. Duplicate tracklets may inflate counts, so this
-    evidence remains a small adjustment rather than an identity count.
+    Nearby teammates provide bounded support while nearby opponents add
+    pressure to the candidate team's score. The contested margin grows only
+    when both teams have local presence. Duplicate tracklets may inflate
+    counts, so this remains a small adjustment rather than an identity count.
     """
     home = _feature(features, "home_nearest_distance")
     away = _feature(features, "away_nearest_distance", home.shape)
     hc = _feature(features, "home_players_nearby", home.shape)
     ac = _feature(features, "away_players_nearby", home.shape)
-    hscore = home + teammate_penalty * np.maximum(hc - 1.0, 0.0)
-    ascore = away + teammate_penalty * np.maximum(ac - 1.0, 0.0)
-    margin = contest_margin + pressure_margin_per_player * np.maximum(hc + ac - 1.0, 0.0)
+    hscore = (home - teammate_support_credit * np.clip(np.maximum(hc - 1.0, 0.0), 0.0, 2.0)
+              + opponent_pressure_penalty * np.clip(ac, 0.0, 3.0))
+    ascore = (away - teammate_support_credit * np.clip(np.maximum(ac - 1.0, 0.0), 0.0, 2.0)
+              + opponent_pressure_penalty * np.clip(hc, 0.0, 3.0))
+    margin = contest_margin + pressure_margin_per_player * np.minimum(hc, ac)
     codes = np.full(home.shape, NOBODY, dtype=np.int8)
     codes[(home <= radius) & (hscore + margin < ascore)] = HOME
     codes[(away <= radius) & (ascore + margin < hscore)] = AWAY

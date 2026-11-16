@@ -4,13 +4,13 @@ import numpy as np
 from synx import approaches, pitch, possession_features, spells, streaming
 
 
-def default_dead_mask(track):
+def default_dead_mask(track, frame_start=0):
     """Build D only from published half windows and visible out-of-pitch evidence."""
     ball = np.asarray(track["ball"])
     dead = np.zeros(len(ball), dtype=bool)
     if "pitch" in track:
         dead |= pitch.ball_out_of_pitch(ball, track["pitch"])
-        dead |= ~pitch.in_play_window(len(ball))
+        dead |= ~pitch.in_play_window(len(ball), start_frame=frame_start)
     return dead
 
 
@@ -41,12 +41,18 @@ def predict_possession(track, optional_events=None, dead=None,
         raise ValueError("dead must have one boolean per frame")
     spell_kwargs = dict(spell_kwargs or {})
     switch_frames = spell_kwargs.pop("switch_frames", spells.SWITCH_CONTROL_FRAMES)
+    pending_gap_frames = spell_kwargs.pop("pending_gap_frames", spells.PENDING_GAP_FRAMES)
+    missing_ball_grace_frames = spell_kwargs.pop(
+        "missing_ball_grace_frames", spells.MISSING_BALL_GRACE_FRAMES
+    )
     if spell_kwargs:
         raise TypeError("Unknown spell options: {}".format(sorted(spell_kwargs)))
     labels = streaming.predict_chunked(
         track, dead_mask, chunk_size=chunk_size,
         feature_kwargs=feature_kwargs, control_kwargs=control_kwargs,
         switch_frames=switch_frames, approach=approach,
+        pending_gap_frames=pending_gap_frames,
+        missing_ball_grace_frames=missing_ball_grace_frames,
     )
     if not return_features:
         return labels

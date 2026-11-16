@@ -11,7 +11,7 @@ sys.path.insert(
     0, os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 )
 
-from synx import ball_possession, data, missing_ball, pitch, spells
+from synx import approaches, ball_possession, data, missing_ball, pitch, spells
 from synx.data import AWAY, HOME, NOBODY
 from synx import possession_features, possession
 
@@ -198,6 +198,37 @@ def test_contested_control():
     ]
 
 
+def test_combined_control_uses_support_movement_and_ball_speed():
+    features = {
+        "home_nearest_distance": np.array([1.1, 0.8]),
+        "away_nearest_distance": np.array([1.7, 1.2]),
+        "home_second_distance": np.array([1.6, 4.0]),
+        "away_second_distance": np.array([4.0, 4.0]),
+        "home_players_nearby": np.array([1, 1]),
+        "away_players_nearby": np.array([1, 1]),
+        "home_approach_speed": np.array([4.0, 0.0]),
+        "away_approach_speed": np.array([0.0, 0.0]),
+        "home_nearest_speed": np.array([4.0, 0.0]),
+        "away_nearest_speed": np.array([1.0, 20.0]),
+        "ball_speed": np.array([0.0, 20.0]),
+    }
+    control = ball_possession.enhanced_control(features)
+    # Frame 0: a nearby second HOME player and closing movement support HOME.
+    # Frame 1: a fast ball near a static HOME player remains uncertain.
+    assert control.tolist() == [HOME, NOBODY]
+
+
+def test_spatial_support_is_not_a_teammate_penalty():
+    features = {
+        "home_nearest_distance": np.array([1.0]),
+        "away_nearest_distance": np.array([1.7]),
+        "home_players_nearby": np.array([2]),
+        "away_players_nearby": np.array([1]),
+    }
+    control = approaches.spatial_based(features)["control"]
+    assert control.tolist() == [HOME]
+
+
 def test_initial_possession():
     s = spells.SWITCH_CONTROL_FRAMES
 
@@ -252,6 +283,33 @@ def test_uncertain_frames_interrupt_switch():
     labels = spells.label_frames(ctrl, dead, seen)
 
     assert (labels == "H").all()
+
+
+def test_brief_unseen_gap_bridges_pending_switch_without_counting_as_control():
+    ctrl = np.array([HOME] * 20 + [AWAY] * 5 + [NOBODY] + [AWAY] * 7)
+    dead = np.zeros(len(ctrl), dtype=bool)
+    seen = np.ones(len(ctrl), dtype=bool)
+    seen[25] = False
+
+    labels = spells.label_frames(ctrl, dead, seen)
+
+    # The unseen frame bridges the candidate spell, but confirmation still
+    # requires 12 observed AWAY-control frames.
+    assert (labels[:20] == "H").all()
+    assert (labels[20:] == "A").all()
+
+
+def test_extended_missing_ball_decays_to_abstention_not_dead_ball():
+    ctrl = np.array([HOME] * 20 + [NOBODY] * 26)
+    dead = np.zeros(len(ctrl), dtype=bool)
+    seen = np.ones(len(ctrl), dtype=bool)
+    seen[20:] = False
+
+    labels = spells.label_frames(ctrl, dead, seen)
+
+    assert (labels[:45] == "H").all()
+    assert labels[45] == "X"
+    assert "D" not in labels
 
 
 def test_missing_ball_preserves_possession():
