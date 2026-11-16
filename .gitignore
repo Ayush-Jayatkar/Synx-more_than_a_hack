@@ -223,6 +223,7 @@ __marimo__/
 data/
 cache/
 outputs/
+Synx.csv
 *.mp4
 
 # Local tracking exports and intermediate data

@@ -31,7 +31,15 @@ The system aims to identify which team controls the ball throughout a match usin
 - NumPy and Pandas
 - Git and GitHub
 
-No machine learning: the pipeline is a fixed rule-based algorithm. Every parameter is justified in `Synx.md`.
+No machine learning: the final pipeline combines tracking-derived evidence with a temporal possession state machine.
+
+## Architecture
+
+`run_all.py` is the final submission pipeline. It loads tracking data, derives the default dead-ball mask, and feeds the Workstream 2 features and possession evidence into the chunked streaming state machine. That engine handles possession switches, missing-ball abstention, and spell continuity, then writes one `H`, `A`, `D`, or `X` label per frame in the official `frame,label` format. The existing submission validator checks the output format.
+
+`modules/synx_combined.py` is a probability adapter for the advanced evidence and is covered by synthetic tests; the final submission pipeline does not blend its probabilities. There is no shared plug-in registry or probability blender in the final path.
+
+`starter/baseline.py` is an optional nearest-player reference baseline, not the final prediction algorithm. Its standalone outputs are for comparison only and are not used by `run_all.py`.
 
 ## Project Structure
 
@@ -39,33 +47,28 @@ No machine learning: the pipeline is a fixed rule-based algorithm. Every paramet
 Synx-more_than_a_hack/
 │
 ├── evaluation/
-│   ├── gt/
 │   ├── results/
 │   ├── possession_metrics.py
 │   ├── run_evaluation.py
 │   └── validate_submission.py
 │
 ├── starter/
-│   ├── 01_smart_tagging.ipynb
-│   ├── 02_tracking_atd.ipynb
-│   ├── 03_first_submission.ipynb
-│   ├── baseline.py
-│   ├── load_atd.py
-│   ├── load_homography.py
-│   ├── load_smart_tagging.py
-│   ├── make_dummy_submission.py
-│   └── utils.py
+│   └── baseline.py          optional nearest-player reference
 │
 ├── synx/
-│   ├── data.py              (A) tracking -> per-frame table
-│   ├── pitch.py             (B) homography, pitch coords, Smart Tagging
-│   ├── ball_possession.py   (C) nearest player, distances, control
-│   ├── missing_ball.py      (D) gap filling, state carry, confidence
-│   └── spells.py            (E) dead ball, hysteresis, spells, X policy
+│   ├── data.py              tracking input and cache
+│   ├── pitch.py             pitch geometry and in-play windows
+│   ├── possession_features.py distance, movement, and spatial features
+│   ├── approaches.py        possession evidence
+│   ├── possession.py        prediction API and dead-ball handling
+│   ├── spells.py            temporal state machine and spell handling
+│   ├── streaming.py         stateful chunk processing
+│   ├── events.py            optional event-context alignment
+│   └── diagnostics.py       local diagnostic reports
 │
-├── docs/WORKSTREAM1.md      data & tracking handoff
-├── tests/test_pipeline.py   synthetic-data checks
-├── run_all.py               writes Synx.csv and validates it
+├── modules/synx_combined.py H/A/D probability adapter
+├── tests/                    synthetic feature, probability, and streaming checks
+├── run_all.py               inference, diagnostics and format validation
 ├── Synx.md                  technical report (upload to the form)
 ├── games.py
 ├── requirements.txt
@@ -122,17 +125,23 @@ $env:MTAH_DATA_DIR = "D:\\data"         # Windows PowerShell
 ### 6. Reproduce Synx.csv
 
 ```bash
-python run_all.py
+python run_all.py --chunk-size 4096 --smart-tagging
 ```
 
-This writes `Synx.csv` (199,319 rows, `frame,label`) and runs `evaluation/validate_submission.py` on it.
+This writes `outputs/workstream2/Synx.csv` (`frame,label`), runs the format validator,
+and saves local comparison, benchmark and frame-level diagnostics under `outputs/workstream2/`.
+Use `--overwrite` only when intentionally replacing that output. Local outputs and caches are ignored by Git.
 
 The first run parses the tracking file and caches it in `cache/` (gitignored); later runs are fast.
 
 Self-checks on synthetic data (no match data needed):
 
 ```bash
+python tests/test_data.py
 python tests/test_pipeline.py
+python tests/test_possession_features.py
+python tests/test_probability_module.py
+python tests/test_streaming.py
 ```
 
 ### 7. Open in VS Code
@@ -164,4 +173,3 @@ git push origin your-name/module      # then open a PR
 ---
 
 **Team Synx**
-

@@ -1,4 +1,10 @@
-# Team Synx - Phase 1 Report
+# Team Synx - Phase 1 Report (Historical)
+
+> **Current Workstream 2 implementation:** this Phase 1 report is historical. It predates the
+> independent distance/movement/spatial controls, streaming state machine, optional event context,
+> and current dead-ball policy. See [docs/WORKSTREAM2.md](docs/WORKSTREAM2.md) for the current
+> architecture, commands, test results and limitations. Do not use the old parameter claims below
+> as the current implementation description.
 
 ## 1. Approach
 Fixed rule-based pipeline, no machine learning, no training:

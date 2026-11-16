@@ -1,142 +1,105 @@
-"""
-run_all.py - tracking data -> validated submission CSV, one command.
-
-    python run_all.py                                   # baseline, validate + score
-    python run_all.py --modules nearest_player,hmm --weights 1,2 --name blend1
-    python run_all.py --window 75 --min-spell 100 --abstain 0.4 --name tuned
-
-Output: evaluation/results/<name>.csv  (columns: frame,label ; 199319 rows).
-Only the graded blocks (games.half_video_blocks) get H/A/D; every other frame is X.
-Run from the repo root.
-"""
+"""Run chunked possession inference and write an official-format submission."""
 import argparse
-import importlib
 import os
-import subprocess
-import sys
 
 import numpy as np
 import pandas as pd
 
+from synx import approaches, data, diagnostics, events, possession, possession_features, spells, streaming
+
 ROOT = os.path.dirname(os.path.abspath(__file__))
-sys.path.insert(0, ROOT)
-sys.path.insert(0, os.path.join(ROOT, "starter"))
-
-from interfaces import LABELS, check_output, normalize  # noqa: E402
-
-# name -> "module_file:ClassName". Each member adds ONE line.
-MODULE_REGISTRY = {
-    "nearest_player": "modules.nearest_player:NearestPlayer",
-    # "hmm":  "modules.hmm_module:HMMModule",
-    "nearest_player_long": "modules.nearest_player:NearestPlayerLong",
-}
-
-# Central knobs (frames at 25 fps). Tune with run_evaluation.py, not inside modules.
-WINDOW = 51        # moving-average window on probabilities (~2 s)
-MIN_SPELL = 75     # possession runs shorter than this are merged into a neighbour (~3 s)
-ABSTAIN = 0.0      # label X where smoothed confidence < this (0 = never abstain)
+DEFAULT_OUTPUT = os.path.join(ROOT, "outputs", "workstream2", "Synx.csv")
 
 
-def load_module(name):
-    path, cls = MODULE_REGISTRY[name].split(":")
-    return getattr(importlib.import_module(path), cls)()
+def _positive_int(value):
+    value = int(value)
+    if value < 1:
+        raise argparse.ArgumentTypeError("must be a positive integer")
+    return value
 
 
-def blend(probs, weights):
-    w = np.asarray(weights, dtype=np.float64)
-    return normalize(sum(wi * p for wi, p in zip(w / w.sum(), probs)))
+def build_parser():
+    """Create the command-line parser without loading any local match assets."""
+    parser = argparse.ArgumentParser(description=__doc__)
+    parser.add_argument("--chunk-size", type=_positive_int, default=4096,
+                        help="tracking frames processed per streaming chunk")
+    parser.add_argument("--smart-tagging", action="store_true",
+                        help="add optional Smart Tagging context to a local diagnostic report")
+    parser.add_argument("--output", default=DEFAULT_OUTPUT,
+                        help="exact path for the official frame,label submission CSV")
+    parser.add_argument("--overwrite", action="store_true",
+                        help="allow replacing an existing submission or diagnostic sidecar")
+    return parser
 
 
-def moving_average(p, window):
-    if window <= 1:
-        return p
-    k = np.ones(window) / window
-    return np.stack([np.convolve(p[:, c], k, mode="same") for c in range(p.shape[1])], axis=1)
+def predict(track, chunk_size=4096, dead=None):
+    """Predict through the shared chunked streaming implementation."""
+    dead = (possession.default_dead_mask(track) if dead is None
+            else spells.validate_dead_mask(dead, len(track["ball"])))
+    return streaming.predict_chunked(track, dead, chunk_size=chunk_size)
 
 
-def _runs(x):
-    change = np.flatnonzero(np.diff(x) != 0) + 1
-    return np.r_[0, change], np.r_[change, len(x)]
+def write_submission(path, labels):
+    """Write the required frame/label CSV from an already predicted label vector."""
+    labels = np.asarray(labels)
+    if labels.ndim != 1 or not np.isin(labels, ("H", "A", "D", "X")).all():
+        raise ValueError("labels must be a one-dimensional H/A/D/X array")
+    parent = os.path.dirname(os.path.abspath(path))
+    os.makedirs(parent, exist_ok=True)
+    pd.DataFrame({"frame": np.arange(len(labels)), "label": labels}).to_csv(path, index=False)
 
 
-def merge_short(idx, min_len):
-    """Merge runs shorter than min_len into the longer neighbouring run, shortest first."""
-    idx = idx.copy()
-    while True:
-        starts, ends = _runs(idx)
-        lens = ends - starts
-        short = np.flatnonzero(lens < min_len)
-        if len(short) == 0 or len(starts) == 1:
-            return idx
-        k = short[np.argmin(lens[short])]
-        left, right = (k - 1 if k > 0 else None), (k + 1 if k < len(starts) - 1 else None)
-        if left is None:
-            tgt = right
-        elif right is None:
-            tgt = left
-        else:
-            tgt = left if lens[left] >= lens[right] else right
-        idx[starts[k]:ends[k]] = idx[starts[tgt]]
+def _assert_writable(paths, overwrite):
+    existing = [path for path in paths if os.path.exists(path)]
+    if existing and not overwrite:
+        raise FileExistsError(
+            "Refusing to overwrite existing output(s): {}. Use --overwrite to replace them.".format(
+                ", ".join(existing)
+            )
+        )
 
 
-def make_labels(prob, blocks, n_frames, window=WINDOW, min_spell=MIN_SPELL, abstain=ABSTAIN):
-    labels = np.full(n_frames, "X", dtype="<U1")
-    for _, a, b in blocks:
-        a, b = max(a, 0), min(b, n_frames - 1)
-        sm = moving_average(prob[a:b + 1], window)
-        idx = merge_short(sm.argmax(axis=1), min_spell)
-        lab = LABELS[idx]
-        lab[sm.max(axis=1) < abstain] = "X"
-        labels[a:b + 1] = lab
+def _write_event_diagnostics(path, track, labels, dead, event_context):
+    """Write local context only; events do not affect control or output labels."""
+    features = possession_features.build_features(track)
+    evidence = approaches.combined(features)
+    diagnostics.write_frame_report(
+        path, labels, features, evidence["control"], dead,
+        confidence=evidence["confidence"], event_context=event_context,
+    )
+
+
+def run(track, output, chunk_size=4096, overwrite=False, event_context=None):
+    """Run inference and write output, optionally adding an event-context sidecar."""
+    output = os.path.abspath(output)
+    diagnostic_path = os.path.join(os.path.dirname(output), "frame_diagnostics.csv")
+    paths = [output] + ([diagnostic_path] if event_context is not None else [])
+    _assert_writable(paths, overwrite)
+
+    dead = possession.default_dead_mask(track)
+    labels = predict(track, chunk_size=chunk_size, dead=dead)
+    write_submission(output, labels)
+    if event_context is not None:
+        _write_event_diagnostics(diagnostic_path, track, labels, dead, event_context)
     return labels
 
 
-def main():
-    ap = argparse.ArgumentParser()
-    ap.add_argument("--modules", default="nearest_player")
-    ap.add_argument("--weights", default=None)
-    ap.add_argument("--name", default="submission")
-    ap.add_argument("--window", type=int, default=WINDOW)
-    ap.add_argument("--min-spell", type=int, default=MIN_SPELL)
-    ap.add_argument("--abstain", type=float, default=ABSTAIN)
-    ap.add_argument("--no-validate", action="store_true")
-    ap.add_argument("--no-eval", action="store_true")
-    a = ap.parse_args()
-
-    from games import GAME, GAMES, half_video_blocks
-    from synx.data import load
-
-    names = a.modules.split(",")
-    weights = [float(w) for w in a.weights.split(",")] if a.weights else [1.0] * len(names)
-    if len(weights) != len(names):
-        sys.exit("--weights must have one value per module")
-
-    n_frames = GAMES[GAME]["n_video_frames"]
-    track = load()
-    if len(track["ball"]) != n_frames:
-        sys.exit("track has {} frames, expected {}".format(len(track["ball"]), n_frames))
-
-    probs = []
-    for nm in names:
-        print("running", nm)
-        probs.append(check_output(load_module(nm).predict_proba(track), n_frames, nm))
-    prob = blend(probs, weights)
-
-    labels = make_labels(prob, half_video_blocks(GAME), n_frames,
-                         a.window, a.min_spell, a.abstain)
-    out_dir = os.path.join(ROOT, "evaluation", "results")
-    os.makedirs(out_dir, exist_ok=True)
-    out = os.path.join(out_dir, a.name + ".csv")
-    pd.DataFrame({"frame": np.arange(n_frames, dtype=np.int64), "label": labels}).to_csv(out, index=False)
-    vals, counts = np.unique(labels, return_counts=True)
-    print("wrote", out, dict(zip(vals, counts.tolist())))
-
-    if not a.no_validate:
-        if subprocess.call([sys.executable, os.path.join(ROOT, "evaluation", "validate_submission.py"), out]):
-            sys.exit("VALIDATION FAILED - do not submit this file")
-    if not a.no_eval:
-        subprocess.call([sys.executable, os.path.join(ROOT, "evaluation", "run_evaluation.py")])
+def main(argv=None):
+    """Parse CLI arguments and run local tracking inference."""
+    args = build_parser().parse_args(argv)
+    track = data.load()
+    event_context = None
+    if args.smart_tagging:
+        raw_events = events.load_smart_tagging_events()
+        event_context = events.align_events(raw_events, len(track["ball"]))
+    labels = run(track, args.output, args.chunk_size, args.overwrite, event_context)
+    print("Submission saved: {}".format(os.path.abspath(args.output)))
+    if event_context is not None:
+        print("Diagnostics saved: {}".format(
+            os.path.join(os.path.dirname(os.path.abspath(args.output)), "frame_diagnostics.csv")
+        ))
+    return 0
 
 
 if __name__ == "__main__":
-    main()
+    raise SystemExit(main())

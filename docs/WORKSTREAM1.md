@@ -1,84 +1,152 @@
-# Workstream 1: Data & Tracking Engineering (handoff)
+# Workstream 1: Data & Tracking Engineering
 
-Branch: `feature/workstream1`. Files: `synx/data.py`, `synx/missing_ball.py`, `tests/test_pipeline.py`.
+Files owned: `synx/data.py`, `synx/tracking_diagnostics.py`, `synx/missing_ball.py`, `tests/test_data.py`.
 
 **Goal:** turn the raw tracking files into clean per-frame arrays that every other module can trust.
+Workstream 2 (`feature/possession-logic`) is the authoritative possession algorithm; nothing here
+changes its logic, state machine or CSV output.
 
-## Status
+## Public data arrays
 
-| Requirement | Status | Where |
+`data.load()` returns a dict. Row i is video frame i (= submission row i); `n` = 199,319.
+
+| Key | Shape | Type | Units | Missing value | Present |
+|---|---|---|---|---|---|
+| `ball` | (n, 2) | float32 | metres (x along length, y along width) | NaN | always |
+| `players` | (n, slots, 2) | float32 | metres | NaN where the slot is empty | always |
+| `player_speed` | (n, slots) | float32 | m/s as reported by the tracking | NaN | always |
+| `ball_speed` | (n,) | float32 | m/s, raw frame-to-frame | NaN on frame 0 and wherever either frame lacks the ball | always |
+| `team` | (slots,) | int8 | 0 = home (Barcelona), 1 = away (Athletic) | none | always |
+| `pitch` | tuple | float | (105.3, 68.0) metres | none | always |
+| `ball_speed_filtered` | (n,) | float32 | m/s, median-filtered | NaN exactly where `ball_speed` is NaN | only with `ball_speed_window` |
+| `ball_z` | (n,) | float32 | as reported, not rescaled | NaN | only if the metadata declares a ball `z` channel |
+
+The six "always" keys are unchanged from the previous version, so Workstream 2 code keeps working.
+Coordinates come in normalised 0-1 and are multiplied by the pitch size. Slots are tracklets, not
+people: they appear, vanish and swap, so use them only by team.
+
+## Configuration
+
+| Option | Default | Effect |
 |---|---|---|
-| Understand ATD structure | Done | `parse_atd` reads `frame:players:ball` lines; frame_id 1 = video frame 0 |
-| Player and ball coordinates | Done | 0-1 coords scaled to metres (105.3 x 68 from `games.py`) |
-| Player speeds | Done | `player_speed`, m/s, as reported by the tracking |
-| Ball speed | Done | `ball_speed`, m/s from frame-to-frame movement |
-| Missing observations and gaps | Done | `NaN` everywhere data is missing; `missing_ball.py` fills ball gaps up to 0.5 s and flags gaps over 3 s |
-| Track slots and team mapping | Done | slot -> team from the ATD metadata via the official `team_of_each_track` |
-| Reusable loading pipeline | Done | `load()` parses once, then reads a cache |
-| Data-quality check | Done | `check()` and `python -m synx.data` |
-| Tests | Done | synthetic data only, no match files |
+| `load(ball_speed_window=None)` | None | 3 or 5 adds `ball_speed_filtered` |
+| `load(use_cache=True)` | True | False always parses the raw file and writes no cache |
+| `load(cache_dir=...)` | `cache/` | where the parsed arrays are stored |
+| `cross_team_duplicates(max_distance_m=0.3)` | 0.3 m | how close two opposite-team slots must be |
+| `cross_team_duplicates(min_frames=25)` | 25 frames (1 s) | how long they must stay that close |
 
-## How to use it
+## Features
 
-```python
-from synx import data
-track = data.load()
-track["ball"]          # (199319, 2) metres, NaN = ball not seen
-track["players"]       # (199319, 46, 2) metres, NaN = slot empty
-track["player_speed"]  # (199319, 46) m/s
-track["ball_speed"]    # (199319,) m/s, NaN where either frame lacks the ball
-track["team"]          # (46,) 0 = home (Barcelona), 1 = away (Athletic)
-track["pitch"]         # (105.3, 68.0)
-```
+### 1. Ball-speed noise filter
 
-Row i is video frame i, the same as submission row i.
+`data.filter_ball_speed(speed, window)` is a centred median over 3 or 5 frames. Each frame uses only
+neighbours from its own unbroken run of valid speeds, so it never smooths across a missing-ball gap
+of any length and never creates a speed inside one. The raw `ball_speed` is kept unchanged; the
+filtered array is a separate key. Window sizes come from the signal, not from scores: a one- or
+two-frame jitter spike is removed by a 3- or 5-frame median, while a real kick (which changes speed
+and then holds it) is kept.
+
+### 2. Cross-team duplicate diagnostics
+
+`tracking_diagnostics.cross_team_duplicates(players, team)` reports pairs of one home and one away
+slot that stay within 0.3 m of each other for at least 1 s in a row (a frame where either is missing
+breaks the run). Each candidate records `home_slot`, `away_slot`, `home_team`, `away_team`,
+`start_frame`, `end_frame` (inclusive), `n_frames`, `median_distance_m`, `confidence` and `reason`.
+Confidence is `high` when the run lasts at least 2 s and the median distance is at most 0.15 m,
+otherwise `medium`. It never deletes or edits tracks, and it is separate from the loader.
+
+Thresholds come from body size: two real players' tracked centres stay about a shoulder-width
+(0.4-0.5 m) apart even in a tight duel, so centres within 0.3 m for a full second are very unlikely
+to be two different people.
 
 ```bash
-python -m synx.data            # data check over the graded frames
-python tests/test_pipeline.py  # self-checks on synthetic data
+python -m synx.tracking_diagnostics   # writes outputs/workstream1/duplicate_candidates.csv (local, gitignored)
 ```
 
-The first `load()` parses the raw file (a minute or two) and saves `cache/BAR-ATH_tracking.npz`. Later
-calls read the cache in seconds. If the raw or metadata file changes (size or modified time), the cache
-is rebuilt automatically. `cache/` is gitignored: it is derived from the match data and must never be
-committed or shared.
+### 3. Ball height
+
+The EPTS metadata XML declares the order of the ball fields as `<BallChannelRef channelId="..."/>`
+entries; this is the same schema the kloppy EPTS reader builds its parser from.
+`data.ball_channels(meta_path)` reads that list. If it contains `z`, `load()` adds `ball_z`, taken
+from that position in each ball record, with NaN where missing and no rescaling (x and y are
+normalised to the pitch, but the schema defines no such normalisation for height). If there is no
+`z` channel, there is no `ball_z` key, and nothing is estimated or invented.
+
+**Status for this match:** the official `DATA.md` lists only `ball_x` and `ball_y` for the ball,
+so height is probably not available. That has not been checked against the real file here, because
+the match data is not opened in AI tools. Check it locally:
+
+```bash
+python -m synx.data --schema
+```
+
+It prints only the channel names, not data values. Until that says `z` is present, treat ball height
+as unavailable.
+
+### 4. Cache
+
+- The first `load()` parses the raw file (a minute or two) and saves `cache/BAR-ATH_tracking.npz`.
+  Later calls read it in seconds.
+- The cache is rebuilt automatically when the raw file or the metadata file changes (size or
+  nanosecond modified time), or when the cache format version changes.
+- A corrupt, empty or half-written cache is treated as missing and rebuilt.
+- Writes go to a temporary file first and are then renamed, so an interrupted run never leaves a
+  broken cache.
+- `cache/` and `outputs/` are gitignored: they are derived from the match data and must never be
+  committed or shared.
+
+### 5. Input checks
+
+- Lines that are not `frame:players:ball` records are skipped, as in the official baseline.
+- An unreadable number or frame id, or a player block that does not match the slot count, raises
+  `ValueError` naming the frame id.
+- Frame ids outside 1..n are ignored. An empty file gives all-NaN arrays.
 
 ## Data check
 
-`python -m synx.data` prints, over the graded frames only:
+`python -m synx.data` prints, over the graded frames only: ball-seen %, longest ball gap, mean
+tracked players, % of frames with more than 22 tracked, slots per team, and whether ball height is
+available. Read these yourself and compare them with the official `DATA.md` (ball visible on 59.3%
+of graded frames, about 20.5 tracked people per graded frame). Do not paste them into any AI tool.
 
-- `ball_seen_pct`: share of frames with a ball position
-- `longest_ball_gap_s`: longest stretch without the ball
-- `mean_tracked_players`: average number of tracked people per frame
-- `frames_over_22_tracked_pct`: frames where the tracker reports more than 22 people (duplicates)
-- `home_slots`, `away_slots`: how many slots belong to each team
+## Test results
 
-Read these yourself. They describe the match data, so do not paste them into any AI tool or chat.
-Compare them with the published figures in the official `DATA.md` (ball visible on 59.3% of graded
-frames, about 20.5 tracked people per graded frame). A large mismatch means a parsing bug.
+Run on synthetic data only (no match data, no ground truth), Python 3.11, numpy 2.1.3, pandas 2.2.3:
 
-## Decisions
+| Suite | Result |
+|---|---|
+| `tests/test_data.py` (Workstream 1, new) | 21 / 21 pass |
+| `tests/test_pipeline.py` (Workstream 2) | 21 / 21 pass |
+| `tests/test_possession_features.py` | 13 / 13 pass |
+| `tests/test_streaming.py` | 13 / 13 pass |
+| `tests/test_probability_module.py` | pass ("All probability module tests passed") |
+| `git diff --check` | clean |
 
-- **Slots are tracklets, not players.** 46 slots for 22 players; they appear, vanish and swap. Every
-  feature is per team, never per slot.
-- **Duplicates.** When the tracker reports one player twice on the same team, the nearest-player distance
-  per team is unchanged, so no correction is needed. A person tracked as both teams cannot be told apart
-  from two real players; that case is only measured (`frames_over_22_tracked_pct`), not fixed.
-- **Ball speed uses the raw ball**, not the gap-filled one, so filled frames never produce made-up speeds.
-- **Missing stays NaN.** No zeros or placeholders, so a missing value can never look like a real position.
+`tests/test_data.py` covers: frame indexing and alignment, coordinate conversion, array and team
+dimensions, speed from known positions, NaN handling, the speed filter (noise spike, gaps, edges,
+invalid windows), long missing-ball gaps, cache creation, rebuild on raw and metadata changes,
+corrupt-cache recovery, raw vs cached equality, ball height present and absent, empty and malformed
+input, and duplicate detection (detection with ranges, persistence, threshold, opposite teams only,
+runs broken by missing frames, inputs not modified).
 
-## Open items for the next owner
+```bash
+python tests/test_data.py
+```
 
-1. Ball speed is noisy where the ball tracking jitters. A short median filter (3-5 frames) may help;
-   pick the window from physics (max kick speed ~35 m/s), not from scores.
-2. Cross-team duplicates are not removed. Possible rule: two opposite-team slots within ~0.3 m for
-   several frames are one person; keep the one with the longer track history.
-3. Ball height is not used. The raw ball group may carry more than x, y; check the official schema
-   (`BAR-ATH_tactical_atd.xml`) before relying on it.
-4. Run `python -m synx.data` once on the real data and confirm the numbers match `DATA.md`.
+## Known limitations
+
+1. Ball height availability for this match is unconfirmed until `python -m synx.data --schema` is
+   run locally.
+2. Duplicate pairs are only reported. Choosing which slot to drop is left to downstream modules.
+3. Duplicate detection checks every home-away slot pair over the full match; that takes longer than
+   loading but is a one-off diagnostic.
+4. The speed filter only removes short spikes; it cannot fix longer stretches where the ball track
+   follows the wrong object.
+5. Nothing here has been run on the real match data in this workstream; run `python -m synx.data`
+   and `python -m synx.tracking_diagnostics` locally once.
 
 ## Rules for this workstream
 
-- Match data is input only. Never tune a parameter by looking at the ground truth or the video.
+- Match data is input only. Never tune a parameter on the ground truth, the video or prediction scores.
 - Never paste raw rows, data-check output or screenshots into AI tools (ChatGPT, Claude, Gemini, Copilot).
-- Never commit `data/` or `cache/`.
+- Never commit `data/`, `cache/` or `outputs/`.
