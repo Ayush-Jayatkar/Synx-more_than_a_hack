@@ -9,6 +9,19 @@ MIN_SPELL_FRAMES = FPS
 LETTER = {HOME: "H", AWAY: "A", None: "X"}
 
 
+def validate_dead_mask(dead, n_frames):
+    """Return an aligned boolean dead mask without truth-coercing bad values."""
+    values = np.asarray(dead)
+    if values.shape != (n_frames,):
+        raise ValueError("dead must have one boolean per frame")
+    if values.dtype.kind == "b":
+        return values
+    if (values.dtype.kind in "iuf" and np.isfinite(values).all()
+            and np.isin(values, (0, 1)).all()):
+        return values.astype(bool)
+    raise ValueError("dead must contain booleans or numeric 0/1 values")
+
+
 class PossessionStateMachine:
     """Incremental state machine with delayed emission for backdated switches.
 
@@ -55,9 +68,11 @@ class PossessionStateMachine:
         if self._finished:
             raise RuntimeError("cannot feed a finished possession state machine")
         ctrl = np.asarray(ctrl)
-        dead = np.asarray(dead, dtype=bool)
+        if ctrl.ndim != 1:
+            raise ValueError("ctrl, dead and ball_seen must be aligned one-dimensional arrays")
+        dead = validate_dead_mask(dead, len(ctrl))
         ball_seen = np.asarray(ball_seen, dtype=bool)
-        if ctrl.ndim != 1 or dead.shape != ctrl.shape or ball_seen.shape != ctrl.shape:
+        if ctrl.ndim != 1 or ball_seen.shape != ctrl.shape:
             raise ValueError("ctrl, dead and ball_seen must be aligned one-dimensional arrays")
         if np.any(~np.isin(ctrl, (NOBODY, HOME, AWAY))):
             raise ValueError("ctrl contains an invalid control code")

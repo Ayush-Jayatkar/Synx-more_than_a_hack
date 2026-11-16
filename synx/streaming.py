@@ -48,9 +48,7 @@ class StreamingPossessionEngine:
         ball = np.asarray(track_chunk.get("ball"))
         if ball.ndim != 2:
             raise ValueError("track chunk must contain ball with shape (frames, 2)")
-        dead = np.asarray(dead, dtype=bool)
-        if dead.shape != (len(ball),):
-            raise ValueError("dead must have one boolean per input frame")
+        dead = spells.validate_dead_mask(dead, len(ball))
         input_start = self.input_frames
         features, self.feature_state = possession_features.build_features(
             track_chunk, previous=self.feature_state, return_state=True,
@@ -84,11 +82,9 @@ def iter_track_chunks(track, dead, chunk_size=4096, feature_kwargs=None,
                       missing_ball_grace_frames=25):
     """Yield ``(start_frame, labels, StreamOutput)`` across any chunk size."""
     ball = np.asarray(track["ball"])
-    dead = np.asarray(dead, dtype=bool)
     if ball.ndim != 2 or ball.shape[1] != 2:
         raise ValueError("ball must have shape (frames, 2)")
-    if dead.shape != (len(ball),):
-        raise ValueError("dead must have one boolean per frame")
+    dead = spells.validate_dead_mask(dead, len(ball))
     if not isinstance(chunk_size, (int, np.integer)) or chunk_size < 1:
         raise ValueError("chunk_size must be a positive integer")
     engine = StreamingPossessionEngine(
@@ -140,9 +136,7 @@ def simulate_realtime(track, dead, frame_limit=None, pace=True, fps=25,
     limit = n if frame_limit is None else int(frame_limit)
     if limit < 0 or limit > n:
         raise ValueError("frame_limit must be in 0..number of frames")
-    dead = np.asarray(dead, dtype=bool)
-    if dead.shape != (n,):
-        raise ValueError("dead must have one boolean per input frame")
+    dead = spells.validate_dead_mask(dead, n)
     engine = StreamingPossessionEngine(
         feature_kwargs, control_kwargs, switch_frames,
         pending_gap_frames=pending_gap_frames,

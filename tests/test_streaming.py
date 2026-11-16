@@ -8,9 +8,10 @@ import numpy as np
 
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
-from synx import approaches, diagnostics, events, possession_features, spells
+from synx import approaches, diagnostics, events, possession, possession_features, spells
 from synx.data import AWAY, HOME, NOBODY
-from synx.streaming import predict_chunked, simulate_realtime
+from synx.streaming import (StreamingPossessionEngine, iter_track_chunks,
+                            predict_chunked, simulate_realtime)
 import run_all
 
 
@@ -31,6 +32,42 @@ def synthetic_track(n=137):
     return {"ball": ball, "players": players, "player_speed": speed,
             "team": np.array([HOME, HOME, AWAY, AWAY]),
             "ball_speed": ball_speed, "pitch": (100.0, 50.0)}
+
+
+def test_public_prediction_and_streaming_reject_malformed_dead_masks():
+    track = synthetic_track(8)
+    n = len(track["ball"])
+    malformed = [
+        np.array([False, True, np.nan, False, False, False, False, False]),
+        np.array(["False"] * n),
+        np.array([0, 0, 2, 0, 0, 0, 0, 0]),
+        np.array([0, 0, -1, 0, 0, 0, 0, 0]),
+        np.zeros((n, 1), dtype=bool),
+        np.array(True),
+    ]
+    entry_points = [
+        lambda mask: spells.label_frames(np.zeros(n, dtype=int), mask,
+                                         np.ones(n, dtype=bool)),
+        lambda mask: possession.predict_possession(track, dead=mask),
+        lambda mask: run_all.predict(track, dead=mask),
+        lambda mask: predict_chunked(track, mask),
+        lambda mask: list(iter_track_chunks(track, mask, chunk_size=3)),
+        lambda mask: simulate_realtime(track, mask, pace=False),
+        lambda mask: StreamingPossessionEngine().feed(track, mask),
+    ]
+    for mask in malformed:
+        for invoke in entry_points:
+            try:
+                invoke(mask)
+            except ValueError:
+                continue
+            raise AssertionError("malformed dead mask was accepted: {!r}".format(mask))
+
+    valid_bool = np.zeros(n, dtype=bool)
+    valid_numeric = np.zeros(n, dtype=np.int8)
+    valid_numeric[2] = 1
+    assert run_all.predict(track, dead=valid_bool).shape == (n,)
+    assert predict_chunked(track, valid_numeric).shape == (n,)
 
 
 def test_incremental_machine_matches_offline_and_backdates():

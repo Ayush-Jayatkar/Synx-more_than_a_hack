@@ -36,9 +36,8 @@ def predict_possession(track, optional_events=None, dead=None,
         raise ValueError("optional_events must be a mapping")
     if dead is None and optional_events is not None:
         dead = optional_events.get("dead")
-    dead_mask = default_dead_mask(track) if dead is None else np.asarray(dead, dtype=bool)
-    if dead_mask.shape != (n,):
-        raise ValueError("dead must have one boolean per frame")
+    dead_mask = (default_dead_mask(track) if dead is None
+                 else spells.validate_dead_mask(dead, n))
     spell_kwargs = dict(spell_kwargs or {})
     switch_frames = spell_kwargs.pop("switch_frames", spells.SWITCH_CONTROL_FRAMES)
     pending_gap_frames = spell_kwargs.pop("pending_gap_frames", spells.PENDING_GAP_FRAMES)

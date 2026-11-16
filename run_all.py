@@ -5,7 +5,7 @@ import os
 import numpy as np
 import pandas as pd
 
-from synx import approaches, data, diagnostics, events, possession, possession_features, streaming
+from synx import approaches, data, diagnostics, events, possession, possession_features, spells, streaming
 
 ROOT = os.path.dirname(os.path.abspath(__file__))
 DEFAULT_OUTPUT = os.path.join(ROOT, "outputs", "workstream2", "Synx.csv")
@@ -34,7 +34,8 @@ def build_parser():
 
 def predict(track, chunk_size=4096, dead=None):
     """Predict through the shared chunked streaming implementation."""
-    dead = possession.default_dead_mask(track) if dead is None else np.asarray(dead, dtype=bool)
+    dead = (possession.default_dead_mask(track) if dead is None
+            else spells.validate_dead_mask(dead, len(track["ball"])))
     return streaming.predict_chunked(track, dead, chunk_size=chunk_size)
 
 
