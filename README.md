@@ -37,9 +37,9 @@ No machine learning: the final pipeline combines tracking-derived evidence with 
 
 `run_all.py` is the final submission-generation pipeline. It loads tracking data, derives the default dead-ball mask, and feeds the Workstream 2 features and possession evidence into the chunked streaming state machine. That engine handles possession switches, missing-ball abstention, and spell continuity, then writes one `H`, `A`, `D`, or `X` label per frame in the official `frame,label` format. The default output is `outputs/workstream2/Synx.csv`; chunk size is configurable, and existing outputs are protected unless `--overwrite` is supplied. Optional Smart Tagging context produces a local diagnostics sidecar and does not change predictions.
 
-Validate a generated CSV separately with `python synx_validate.py <submission.csv>`. This wrapper calls the official format validator in `evaluation/validate_submission.py`; validation does not use ground truth. `modules/synx_combined.py` is a separately tested H/A/D probability adapter for the advanced evidence and is not used by the final submission pipeline. There is no shared plug-in registry or probability blender in the final path.
+Validate a generated CSV separately with `python synx_validate.py <submission.csv>`. This wrapper calls the official format validator in `evaluation/validate_submission.py`; validation does not use ground truth. `modules/synx_combined.py` is a separately tested H/A/D probability adapter for the advanced evidence and is not used by the final submission pipeline. `interfaces.py` defines the optional module contract, probability normalization and validation, and probability blending; `modules/registry.py` provides a small registry for constructing the advanced adapter or optional baseline. These helpers are for independent module evaluation and are not wired into `run_all.py`.
 
-`starter/baseline.py` is an optional nearest-player reference baseline, not the final prediction algorithm. Its standalone outputs are for comparison only and are not used by `run_all.py`.
+`starter/baseline.py` is the original nearest-player reference. `modules/nearest_player.py` adapts that optional baseline to the shared module contract for synthetic/offline comparisons; neither baseline is the final prediction algorithm or used by `run_all.py`.
 
 ## Project Structure
 
@@ -66,7 +66,11 @@ Synx-more_than_a_hack/
 │   ├── events.py            optional event-context alignment
 │   └── diagnostics.py       local diagnostic reports
 │
-├── modules/synx_combined.py H/A/D probability adapter
+├── interfaces.py            shared module contract and probability helpers
+├── modules/
+│   ├── registry.py          optional module registry
+│   ├── nearest_player.py    optional nearest-player baseline
+│   └── synx_combined.py     H/A/D probability adapter
 ├── tests/                    synthetic feature, probability, and streaming checks
 ├── run_all.py               inference, diagnostics and format validation
 ├── Synx.md                  technical report (upload to the form)
