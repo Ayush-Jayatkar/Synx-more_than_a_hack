@@ -1,7 +1,7 @@
 # Team Synx - Technical Report
 
 More Than a Hack 2027. Football possession from tracking data. This report describes what the code in this
-repository does. It makes no accuracy or score claim. File names in brackets point to the source of each statement.
+repository does. It makes no full-match accuracy claim; a limited public five-minute sample evaluation is reported in Section 15. File names in brackets point to the source of each statement.
 
 ## 1. Problem and objective
 
@@ -13,7 +13,7 @@ The task is to label every frame of the tactical video (BAR-ATH, 199,319 frames,
 - `X` abstain
 
 The output is a CSV with columns `frame,label`, one row per video frame [`run_all.py`, `games.py`]. Our objective is a
-deterministic, explainable pipeline that uses tracking data only, with no training on the match.
+deterministic, explainable pipeline that uses player and ball tracking data for possession inference, with official Smart Tagging set-piece events as additional dead-ball evidence in the default tagged mode.tracking data only, with no training on the match.
 
 ## 2. Overall approach
 
@@ -49,7 +49,7 @@ not imported by the production path.
 | Smart Tagging (`BAR-ATH_tactical_smart_tagging.xml`) | Yes, in the default `tagged` mode (dead-ball only) | Prediction input in `tagged` mode, the `run_all.py` default: set-piece tags mark where a stoppage is looked for [`synx/stoppages.py`]. Team tags and phase codes are not used. With `--smart-tagging` it also fills extra columns of a diagnostics CSV, which does not change labels [`synx/events.py`, `synx/diagnostics.py`]. `--dead-ball basic` and `tracking` do not read it. The starter kit recommends set pieces as dead-ball evidence and the team confirmed it is an allowed input. The XML is match data and is never committed. |
 | Homography | No | Not read by any production code. ATD is already in pitch coordinates. |
 | Tactical and broadcast video | No | Not read. |
-| Public ground truth (`evaluation/gt/`) | No | Not read by `run_all.py`. Kept locally only, not in Git. |
+| Public ground truth (`evaluation/gt/`) | No | Not read by `run_all.py`. Public evaluation files are absent from the current repository tree, although earlier copies may remain in Git history. |
 
 The two kickoff frame numbers used for the in-play window (11185 and 113742) are constants in
 `starter/load_smart_tagging.py` (`KICKOFF_VIDEO_FRAMES`), described there as published values. The Smart Tagging file
