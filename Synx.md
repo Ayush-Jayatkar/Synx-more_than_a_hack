@@ -12,8 +12,7 @@ The task is to label every frame of the tactical video (BAR-ATH, 199,319 frames,
 - `D` dead ball
 - `X` abstain
 
-The output is a CSV with columns `frame,label`, one row per video frame [`run_all.py`, `games.py`]. Our objective is a
-deterministic, explainable pipeline that uses player and ball tracking data for possession inference, with official Smart Tagging set-piece events as additional dead-ball evidence in the default tagged mode.tracking data only, with no training on the match.
+The output is a CSV with columns `frame,label`, one row per video frame [`run_all.py`, `games.py`]. Our objective is a deterministic, explainable pipeline that uses player and ball tracking data for possession inference, with official Smart Tagging set-piece events as additional dead-ball evidence in the default tagged mode. No training is performed on the match.
 
 ## 2. Overall approach
 
@@ -267,7 +266,7 @@ protected against this in `_approach_speed` [`synx/possession_features.py`]:
 
 The results below come from a local run on 2026-11-17 with the official data bundle. Section 10 of the README has the commands to repeat each check.
 
-Validation was about correctness and format. We make no accuracy claim, and aggregate label shares are not reported as accuracy.
+Validation covered implementation behaviour, reproducibility and output format. The public sample scores below apply only to the five-minute evaluation sample and must not be interpreted as full-match accuracy.
 
 - `python -m pytest tests/ -v`: all 130 tests pass, on the pinned stack (numpy 2.1.3, pandas 2.2.3) and on
   numpy 2.5.4 / pandas 3.0.6. They use synthetic data only. Each test file except `tests/test_module_architecture.py`
