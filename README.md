@@ -174,8 +174,39 @@ python run_all.py --smart-tagging --overwrite   # also writes outputs/workstream
 
 ## 10. Tests and validation
 
+Synthetic tests (no match data needed). The whole suite under pytest:
+
 ```bash
 python -m pytest tests/ -v
+```
+
+Each file also runs on its own as a script (`tests/test_module_architecture.py` runs under pytest only):
+
+```bash
+python -B tests/test_data.py
+python -B tests/test_pipeline.py
+python -B tests/test_possession_features.py
+python -B tests/test_probability_module.py
+python -B tests/test_streaming.py
+git diff --check
+```
+
+| File | What it covers |
+|---|---|
+| `test_data.py` | ATD parsing, malformed lines, NaN for missing observations, ball speed, cache |
+| `test_possession_features.py` | nearest / second-nearest distances, speeds, approach speed, discontinuity filter |
+| `test_pipeline.py` | control evidence, state machine, hysteresis, dead ball, missing-ball grace |
+| `test_streaming.py` | chunked engine: identical labels for any chunk size, state carried across chunk boundaries, runner CLI |
+| `test_probability_module.py`, `test_module_architecture.py` | optional offline helpers in `interfaces.py` and `modules/` |
+
+`test_long_match_chunk_sizes_match_offline_engine` in `test_streaming.py` runs a 5,000-frame synthetic match at
+chunk sizes 1, 25, 100, 512 and 4096. It checks every size against the whole-track run and
+`possession.predict_possession`. The match includes a short ball gap across a chunk boundary (the label is held), a
+ball gap longer than 1 s (the label becomes `X`) and dead runs across chunk boundaries (`D`).
+
+Validation of a generated CSV (needs the match data, see section 7):
+
+```bash
 python evaluation/validate_submission.py outputs/workstream2/Synx.csv
 python synx_validate.py outputs/workstream2/Synx.csv
 python verify_synx.py --input outputs/workstream2/Synx.csv --diagnostics outputs/workstream2/frame_diagnostics.csv
@@ -196,11 +227,34 @@ python run_all.py --output outputs/hash_run2.csv --overwrite
 
 Both lines print `True`.
 
+Structural check of the CSV (expect 199319 rows, columns `['frame', 'label']`, labels H/A/D/X only, 0 duplicates,
+0 nulls, frames 0 to 199318):
+
+```bash
+python -c "import pandas as pd; d=pd.read_csv('outputs/workstream2/Synx.csv'); print(len(d), list(d.columns), d.label.value_counts().to_dict(), d.frame.duplicated().sum(), d.isnull().sum().sum(), d.frame.min(), d.frame.max())"
+```
+
 - The tests use synthetic arrays only. They do not need match data.
 - `validate_submission.py` and `synx_validate.py` check the file format only (row count, frame numbers, labels). They use no ground truth.
 - `verify_synx.py` requires `--diagnostics`. Create that file first with the `--smart-tagging` command in
   section 9. The script checks that the two files have the same frames. It writes `verification_report.json`
   next to the `--input` file.
+
+What these checks show:
+
+- The synthetic tests check that the logic is correct on constructed inputs.
+- The validators and the structural check confirm the output format.
+- The chunk and hash checks confirm the output is reproducible.
+- None of them measures prediction accuracy. `evaluation/run_evaluation.py` and the ground truth are not part of
+  this workflow. No spellF1 or macroF1 was computed, and no parameter was chosen from a score.
+
+Last local run (2026-11-17, Python 3.13.7, numpy 2.1.3, pandas 2.2.3):
+
+- 109 tests passed, and every test script exited with code 0.
+- The official validator reported OK.
+- `verify_synx.py` completed.
+- Chunk sizes 256, 1024, 4096 and the whole track gave identical labels, and two fresh runs gave identical files.
+- `outputs/workstream2/Synx.csv` SHA-256: `c46a268a6bed3024405498d236b922e67a0121b66d2d5f006e16c1d77c0285fb`.
 
 ## 11. Output format
 
