@@ -133,6 +133,45 @@ def test_chunk_sizes_produce_identical_labels():
         assert np.array_equal(predict_chunked(track, dead, chunk_size=size), expected)
 
 
+def long_synthetic_match(n=5000):
+    """Alternating home/away possession with ball gaps and dead runs placed across chunk boundaries."""
+    time = np.arange(n, dtype=float) / 25.0
+    ball = np.column_stack((50 + 20 * np.sin(time / 7), 30 + 10 * np.cos(time / 5)))
+    owner_home = (np.arange(n) // 600) % 2 == 0
+    near = np.where(owner_home, 0.5, 6.0)
+    far = np.where(owner_home, 6.0, 0.5)
+    players = np.empty((n, 4, 2), dtype=float)
+    players[:, 0] = np.column_stack((ball[:, 0] + near, ball[:, 1]))
+    players[:, 1] = np.column_stack((ball[:, 0] + near + 4, ball[:, 1] + 1))
+    players[:, 2] = np.column_stack((ball[:, 0] - far, ball[:, 1]))
+    players[:, 3] = np.column_stack((ball[:, 0] - far - 4, ball[:, 1] - 1))
+    ball_speed = np.r_[np.nan, np.hypot(*np.diff(ball, axis=0).T) * 25]
+    for start, end in ((509, 516), (4090, 4131)):  # short gap over 512, long (> 1 s) gap over 4096
+        ball[start:end] = np.nan
+        ball_speed[start:end + 1] = np.nan
+    dead = np.zeros(n, dtype=bool)
+    dead[1990:2011] = True  # dead run across the 2000 (100/25) boundary
+    dead[3070:3075] = True
+    track = {"ball": ball, "players": players, "player_speed": np.ones((n, 4)),
+             "team": np.array([HOME, HOME, AWAY, AWAY]), "ball_speed": ball_speed,
+             "pitch": (105.0, 68.0)}
+    return track, dead
+
+
+def test_long_match_chunk_sizes_match_offline_engine():
+    track, dead = long_synthetic_match()
+    offline = possession.predict_possession(track, dead=dead)
+    offline = offline[0] if isinstance(offline, tuple) else offline
+    whole = predict_chunked(track, dead, chunk_size=len(dead))
+    assert np.array_equal(whole, offline)
+    for size in (1, 25, 100, 512, 4096):
+        assert np.array_equal(predict_chunked(track, dead, chunk_size=size), whole), size
+    assert set(np.unique(whole)) == {"H", "A", "D", "X"}
+    assert (whole[dead] == "D").all()
+    assert (whole[509:516] == whole[508]).all()  # short gap holds the label
+    assert (whole[4116:4131] == "X").all()  # beyond the 25-frame grace the label is X
+
+
 def test_unpaced_live_simulation_matches_offline_and_benchmarks_chunks():
     track = synthetic_track(31)
     dead = np.zeros(31, dtype=bool)

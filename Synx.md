@@ -232,9 +232,15 @@ The results below come from a local run on 2026-11-17 with the official data bun
 
 Validation was about correctness and format. We make no accuracy claim, and aggregate label shares are not reported as accuracy.
 
-- `python -m pytest tests/ -v`: all 108 tests pass, on the pinned stack (numpy 2.1.3, pandas 2.2.3) and on
-  numpy 2.5.4 / pandas 3.0.6. They use synthetic data only. `tests/test_streaming.py` includes a 5,000-frame
-  synthetic match checked at chunk sizes 1, 25, 100, 512 and 4096, with ball gaps and dead runs across chunk boundaries.
+- `python -m pytest tests/ -v`: all 109 tests pass, on the pinned stack (numpy 2.1.3, pandas 2.2.3) and on
+  numpy 2.5.4 / pandas 3.0.6. They use synthetic data only. Each test file except `tests/test_module_architecture.py`
+  (pytest only) also runs as a script (`python -B tests/<file>.py`). `tests/test_streaming.py`
+  (`test_long_match_chunk_sizes_match_offline_engine`) runs a 5,000-frame synthetic match at chunk sizes 1, 25, 100,
+  512 and 4096 and checks it against the whole-track run and `possession.predict_possession`. A short ball gap
+  (over the 512 boundary), a ball gap longer than 1 s (over the 4096 boundary) and dead runs (one over the 2000 boundary) are included.
+- Not run: `evaluation/run_evaluation.py` and the public five-minute ground truth. No spellF1 or macroF1 was computed,
+  and no parameter was chosen from any score. These checks show the pipeline runs correctly and the output has the
+  right format. They do not measure prediction accuracy.
 - `git diff --check`: clean.
 - `python evaluation/validate_submission.py outputs/workstream2/Synx.csv`: OK. 199,319 rows, frames 0..199,318, labels only
   H, A, D, X.
