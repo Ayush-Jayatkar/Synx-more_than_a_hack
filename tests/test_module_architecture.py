@@ -56,6 +56,12 @@ def test_normalize_handles_unnormalized_and_zero_rows():
     assert np.allclose(normalized.sum(axis=1), 1.0)
 
 
+def test_normalize_is_stable_for_extreme_finite_scores():
+    result = normalize([[1e308, 1e308, 0.0], [1e308, 0.0, 1e308]])
+    assert np.allclose(result, [[0.5, 0.5, 0.0], [0.5, 0.0, 0.5]])
+    assert np.allclose(result.sum(axis=1), 1.0)
+
+
 @pytest.mark.parametrize("scores", [
     np.array([1.0, 1.0, 1.0]),
     np.array([[1.0, 2.0]]),
@@ -92,6 +98,14 @@ def test_probability_blending_equal_and_explicit_weights():
     assert np.allclose(weighted.sum(axis=1), 1.0)
 
 
+def test_probability_blending_is_stable_for_extreme_finite_weights():
+    home = np.tile([0.8, 0.1, 0.1], (2, 1))
+    away = np.tile([0.1, 0.8, 0.1], (2, 1))
+    blended = blend_probabilities([home, away], weights=[1e308, 1e308])
+    assert np.allclose(blended, np.tile([0.45, 0.45, 0.1], (2, 1)))
+    assert np.allclose(blended.sum(axis=1), 1.0)
+
+
 @pytest.mark.parametrize("outputs, weights", [
     ([], None),
     ([np.ones((2, 3))], [0.0]),
@@ -118,7 +132,7 @@ def test_registry_creates_workstream2_and_optional_baseline_modules():
         registry.create("missing")
 
 
-def test_nearest_player_baseline_returns_probabilities_without_pipeline_wiring():
+def test_nearest_player_baseline_requires_explicit_dead_evidence():
     track = synthetic_track()
     output = NearestPlayer().predict_proba(track)
     assert output.shape == (5, 3)
@@ -127,7 +141,23 @@ def test_nearest_player_baseline_returns_probabilities_without_pipeline_wiring()
 
     track["ball"][2:] = np.nan
     missing = NearestPlayer(ffill_s=0).predict_proba(track)
-    assert np.allclose(missing[2:], [0.0, 0.0, 1.0])
+    assert np.allclose(missing[2:], [0.5, 0.5, 0.0])
+    track["dead"] = np.array([False, False, True, False, False])
+    explicit_dead = NearestPlayer(ffill_s=0).predict_proba(track)
+    assert np.array_equal(explicit_dead[2], [0.0, 0.0, 1.0])
+
+
+@pytest.mark.parametrize("dead", [
+    np.array([False, np.nan, False, False, False], dtype=object),
+    np.array([False, "no", False, False, False], dtype=object),
+    np.array([0, 2, 0, 0, 0]),
+    np.array([False, True]),
+])
+def test_nearest_player_rejects_invalid_dead_masks(dead):
+    track = synthetic_track()
+    track["dead"] = dead
+    with pytest.raises(ValueError):
+        NearestPlayer().predict_proba(track)
 
 
 def test_synx_combined_still_works_through_common_contract():

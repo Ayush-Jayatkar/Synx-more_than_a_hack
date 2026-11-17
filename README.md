@@ -41,6 +41,17 @@ Validate a generated CSV separately with `python synx_validate.py <submission.cs
 
 `starter/baseline.py` is the original nearest-player reference. `modules/nearest_player.py` adapts that optional baseline to the shared module contract for synthetic/offline comparisons; neither baseline is the final prediction algorithm or used by `run_all.py`.
 
+## Tracking provenance
+
+On 2026-11-17, the local cache was parsed again from the original tactical
+ATD and metadata in the permitted Metrica data bundle, without using video or
+ground-truth files. The source contained 199,319 sequential one-based ATD
+frames. The resulting ball coordinates, player coordinates, player speeds,
+team assignments, and NaN missing-value locations matched
+`cache/BAR-ATH_tracking.npz` exactly. Cache frame `i` corresponds to ATD
+`IdFrame i + 1` at 25 FPS. The provenance report is local-only and is not an
+accuracy evaluation.
+
 ## Project Structure
 
 ```text

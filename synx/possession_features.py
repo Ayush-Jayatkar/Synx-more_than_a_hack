@@ -27,6 +27,47 @@ def _team_features(ball, players, speeds, team, team_id, radius):
     return nearest, second, nearest_speed, nearby
 
 
+def _approach_speed(distance, nearest_speed, ball_speed,
+                    previous_distance=None, previous_nearest_speed=None):
+    """Closing speed for a continuously plausible nearest-team observation.
+
+    A change in nearest distance cannot exceed the ball displacement plus the
+    displacement of either endpoint's nearest player.  When it does, the team
+    minimum changed because a tracklet appeared, disappeared, or swapped; it
+    is not motion evidence and is represented as ``NaN``.  This retains normal
+    ball and player movement while preventing a tracklet discontinuity from
+    receiving the bounded approach credit in Approach B/E.
+    """
+    distance = np.asarray(distance, dtype=float)
+    nearest_speed = np.asarray(nearest_speed, dtype=float)
+    ball_speed = np.asarray(ball_speed, dtype=float)
+    n = len(distance)
+    result = np.full(n, np.nan, dtype=float)
+    if not n:
+        return result
+
+    prior_distance = np.full(n, np.nan, dtype=float)
+    prior_player_speed = np.full(n, np.nan, dtype=float)
+    if previous_distance is not None:
+        prior_distance[0] = previous_distance
+    if previous_nearest_speed is not None:
+        prior_player_speed[0] = previous_nearest_speed
+    if n > 1:
+        prior_distance[1:] = distance[:-1]
+        prior_player_speed[1:] = nearest_speed[:-1]
+
+    valid = (np.isfinite(distance) & np.isfinite(prior_distance)
+             & np.isfinite(nearest_speed) & np.isfinite(prior_player_speed)
+             & np.isfinite(ball_speed) & (ball_speed >= 0)
+             & (nearest_speed >= 0) & (prior_player_speed >= 0))
+    raw = (prior_distance - distance) * FPS
+    # Triangle inequality gives this bound for the two observed positions.
+    max_plausible = ball_speed + np.maximum(nearest_speed, prior_player_speed)
+    valid &= np.abs(raw) <= max_plausible + 1e-6
+    result[valid] = raw[valid]
+    return result
+
+
 def build_features(track, control_radius=DEFAULT_CONTROL_RADIUS_M,
                    previous=None, return_state=False):
     """Build arrays aligned to tracking frames. Distances are m, speeds m/s.
@@ -80,13 +121,6 @@ def build_features(track, control_radius=DEFAULT_CONTROL_RADIUS_M,
     magnitude = np.hypot(velocity[:, 0], velocity[:, 1])
     moving = np.isfinite(magnitude) & (magnitude > 0)
     direction[moving] = velocity[moving] / magnitude[moving, None]
-    def approach(distance, previous_value):
-        result = np.full(n, np.nan)
-        if n and previous_value is not None and np.isfinite(previous_value) and np.isfinite(distance[0]):
-            result[0] = (previous_value - distance[0]) * FPS
-        valid = np.isfinite(distance[1:]) & np.isfinite(distance[:-1])
-        result[1:][valid] = (distance[:-1][valid] - distance[1:][valid]) * FPS
-        return result
     result = {
         "home_nearest_distance": hn.astype(np.float32), "away_nearest_distance": an.astype(np.float32),
         "home_second_distance": hs.astype(np.float32), "away_second_distance": ass.astype(np.float32),
@@ -95,11 +129,15 @@ def build_features(track, control_radius=DEFAULT_CONTROL_RADIUS_M,
         "distance_advantage": advantage.astype(np.float32),
         "ball_speed": np.where(np.isfinite(ball_speed) & (ball_speed >= 0), ball_speed, np.nan).astype(np.float32),
         "ball_velocity": velocity.astype(np.float32), "ball_direction": direction.astype(np.float32),
-        "home_approach_speed": approach(
-            hn, None if previous is None else previous.get("home_nearest_distance")
+        "home_approach_speed": _approach_speed(
+            hn, hv, ball_speed,
+            None if previous is None else previous.get("home_nearest_distance"),
+            None if previous is None else previous.get("home_nearest_speed"),
         ).astype(np.float32),
-        "away_approach_speed": approach(
-            an, None if previous is None else previous.get("away_nearest_distance")
+        "away_approach_speed": _approach_speed(
+            an, av, ball_speed,
+            None if previous is None else previous.get("away_nearest_distance"),
+            None if previous is None else previous.get("away_nearest_speed"),
         ).astype(np.float32),
         "ball_seen": np.isfinite(ball).all(axis=1),
     }
@@ -111,5 +149,7 @@ def build_features(track, control_radius=DEFAULT_CONTROL_RADIUS_M,
             "ball": ball[-1].copy(),
             "home_nearest_distance": float(hn[-1]),
             "away_nearest_distance": float(an[-1]),
+            "home_nearest_speed": float(hv[-1]),
+            "away_nearest_speed": float(av[-1]),
         }
     return result, state

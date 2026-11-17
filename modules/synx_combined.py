@@ -42,18 +42,18 @@ class SynxCombined(PossessionModule):
 
     @staticmethod
     def _dead_mask(track, ball, n, frame_start=0):
-        """Return validated explicit/default dead evidence, or None if invalid."""
+        """Return validated explicit/default dead evidence."""
         if "dead" in track:
             raw_dead = np.asarray(track["dead"])
             if raw_dead.shape != (n,):
-                return None
+                raise ValueError("track['dead'] must have shape (n_frames,)")
             if raw_dead.dtype.kind == "b":
                 return raw_dead
             if (raw_dead.dtype.kind in "iuf"
                     and np.isfinite(raw_dead).all()
                     and np.isin(raw_dead, (0, 1)).all()):
                 return raw_dead.astype(bool)
-            return None
+            raise ValueError("track['dead'] must contain only booleans or 0/1")
         if "pitch" in track:
             return (pitch.ball_out_of_pitch(np.asarray(ball, dtype=float), track["pitch"])
                     | ~pitch.in_play_window(n, start_frame=frame_start))
@@ -74,11 +74,12 @@ class SynxCombined(PossessionModule):
         retained on this model instance. For exact whole/chunk equivalence,
         chunks must be contiguous and callers must pass both values.
         """
-        try:
-            raw_ball = np.asarray(track["ball"])
-            n = int(raw_ball.shape[0]) if raw_ball.ndim else 0
-        except (TypeError, KeyError, IndexError, AttributeError):
-            return self._fallback(0), previous_features
+        if not isinstance(track, dict) or "ball" not in track:
+            raise ValueError("track must be a mapping containing 'ball'")
+        raw_ball = np.asarray(track["ball"])
+        if raw_ball.ndim == 0:
+            raise ValueError("track['ball'] must have a frame dimension")
+        n = int(raw_ball.shape[0])
         if not isinstance(frame_start, (int, np.integer)) or frame_start < 0:
             raise ValueError("frame_start must be a nonnegative absolute frame index")
         if frame_start == 0 and previous_features is not None:
@@ -93,14 +94,11 @@ class SynxCombined(PossessionModule):
                     "chunk context must end at frame_start - 1; pass prior chunk state"
                 )
         fallback = self._fallback(n)
-        try:
-            local_track = dict(track)
-            dead = self._dead_mask(local_track, raw_ball, n, frame_start)
-        except (TypeError, ValueError, IndexError, AttributeError):
-            return fallback, previous_features
-        if dead is None:
-            return fallback, previous_features
+        local_track = dict(track)
+        dead = self._dead_mask(local_track, raw_ball, n, frame_start)
         fallback[dead] = (0.0, 0.0, 1.0)
+        if n == 0:
+            return fallback, previous_features
         try:
             # Rebuild the first ball-speed value from explicit previous-frame
             # context. This also handles callers that calculate speed per chunk.
@@ -129,7 +127,7 @@ class SynxCombined(PossessionModule):
             hn = np.asarray(features["home_nearest_distance"], dtype=float)
             an = np.asarray(features["away_nearest_distance"], dtype=float)
             if hn.shape != (n,) or an.shape != (n,):
-                return fallback, next_features
+                raise ValueError("feature arrays must align with the input frames")
 
             hscore, ascore, margin = enhanced_scores(features, **self.control_kwargs)
             delta = ascore - hscore
@@ -183,8 +181,8 @@ class SynxCombined(PossessionModule):
             if dead.any():
                 result[dead] = (0.0, 0.0, 1.0)
             if not np.isfinite(result).all() or np.any(result < 0):
-                return fallback, next_features
+                raise ValueError("probability output was non-finite or negative")
             return result, next_features
         except (KeyError, TypeError, ValueError, IndexError, AttributeError,
                 FloatingPointError):
-            return fallback, previous_features
+            raise

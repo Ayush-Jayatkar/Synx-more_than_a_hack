@@ -19,7 +19,7 @@ Required tracking arrays from `data.load()`:
 | `ball_speed` | `(F,)` | m/s |
 | `pitch` | `(length, width)` | metres; used for visible out-of-pitch evidence |
 
-`build_features(track)` returns frame-aligned arrays. Ball vectors (`ball_velocity`, `ball_direction`) are `(F,2)`. Approach speed is the change in team-nearest distance per second; it is weak evidence because the nearest tracklet can change. Player acceleration is not derived across slots because slot identity is not stable.
+`build_features(track)` returns frame-aligned arrays. Ball vectors (`ball_velocity`, `ball_direction`) are `(F,2)`. Approach speed is retained only when its distance change is compatible with the observed ball speed and previous/current nearest-player speeds. Larger changes are tracklet discontinuities and become missing movement evidence. Player acceleration is not derived across slots because slot identity is not stable.
 
 The prediction API is:
 
@@ -59,7 +59,7 @@ No approach is described as more accurate based on agreement, confidence or coun
 - Control radius: 2.0 m by default.
 - Contest margin: 0.4 m by default.
 - Teammate crowding penalty: 0.25 m per extra nearby teammate.
-- Approach credit: 0.05 m per m/s, bounded to approach evidence of +/-5 m/s.
+- Approach credit: 0.05 m per m/s, bounded to positive approach evidence of 5 m/s after the physical-continuity check.
 - Ball-speed uncertainty: 0.02 m per m/s, capped at 1.0 m.
 - Possession confirmation: 13 consecutive frames (about 0.5 s at 25 FPS).
 

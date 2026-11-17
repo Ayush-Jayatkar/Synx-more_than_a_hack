@@ -213,22 +213,28 @@ def test_match_window_boundary_uses_absolute_frames():
     assert_probability_contract(whole)
 
 
-def test_invalid_dead_mask_cannot_fabricate_dead_ball():
+def test_invalid_dead_mask_raises_instead_of_being_silently_ignored():
+    import pytest
     track = make_track(4)
-    track["dead"] = np.array([False, np.nan, "False", False], dtype=object)
-    result = SynxCombined().predict_proba(track)
-    assert np.allclose(result[:, :2], 0.5)
-    assert np.all(result[:, 2] == 0.0)
+    invalid_masks = (
+        np.array([False, np.nan, False, False]),
+        np.array([False, "False", False, False]),
+        np.array([0, 2, 0, 0]),
+        np.array([False, True]),
+    )
+    for dead in invalid_masks:
+        track["dead"] = dead
+        with pytest.raises(ValueError, match=r"track\['dead'\]"):
+            SynxCombined().predict_proba(track)
 
 
-def test_explicit_dead_evidence_survives_unavailable_possession_features():
-    result = SynxCombined().predict_proba({
-        "ball": np.full((3, 2), np.nan),
-        "dead": np.array([False, True, False]),
-    })
-    assert np.allclose(result[0], [0.5, 0.5, 0.0])
-    assert np.array_equal(result[1], [0.0, 0.0, 1.0])
-    assert np.allclose(result[2], [0.5, 0.5, 0.0])
+def test_adapter_rejects_missing_feature_arrays_even_with_explicit_dead_mask():
+    import pytest
+    with pytest.raises(ValueError, match="tracking fields"):
+        SynxCombined().predict_proba({
+            "ball": np.full((3, 2), np.nan),
+            "dead": np.array([False, True, False]),
+        })
 
 
 def test_custom_feature_control_radius_is_respected():
@@ -248,13 +254,13 @@ def test_uncalibrated_evidence_never_returns_certain_team_probability():
 
 
 def test_empty_and_invalid_tracking_are_handled():
+    import pytest
     model = SynxCombined()
     assert model.predict_proba({"ball": np.empty((0, 2))}).shape == (0, 3)
-    invalid = model.predict_proba({"ball": np.zeros((3, 2))})
-    assert invalid.shape == (3, 3)
-    assert np.allclose(invalid[:, :2], 0.5)
-    assert np.all(invalid[:, 2] == 0.0)
-    assert model.predict_proba({}).shape == (0, 3)
+    with pytest.raises(ValueError, match="tracking fields"):
+        model.predict_proba({"ball": np.zeros((3, 2))})
+    with pytest.raises(ValueError, match="mapping containing"):
+        model.predict_proba({})
 
 
 def test_chunk_context_matches_whole_track_for_motion_gaps_switches_and_dead():

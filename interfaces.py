@@ -45,9 +45,13 @@ def normalize(probabilities):
     scores = _as_probability_matrix(probabilities, who="normalize")
     if np.any(scores < 0):
         raise ValueError("[normalize] scores must be nonnegative")
-    totals = scores.sum(axis=1, keepdims=True)
+    # Scale before summing: summing finite values such as 1e308 can overflow.
+    row_max = scores.max(axis=1, keepdims=True, initial=0.0)
+    scaled = np.zeros_like(scores)
+    np.divide(scores, row_max, out=scaled, where=row_max > 0)
+    totals = scaled.sum(axis=1, keepdims=True)
     result = np.full_like(scores, 1.0 / N_CLASSES)
-    np.divide(scores, totals, out=result, where=totals > 0)
+    np.divide(scaled, totals, out=result, where=totals > 0)
     return result
 
 
@@ -93,10 +97,11 @@ def blend_probabilities(outputs, weights=None):
             raise ValueError(f"expected {len(matrices)} blend weights")
         if not np.isfinite(normalized_weights).all() or np.any(normalized_weights < 0):
             raise ValueError("blend weights must be finite and nonnegative")
-        total_weight = normalized_weights.sum()
-        if total_weight <= 0:
+        max_weight = normalized_weights.max(initial=0.0)
+        if max_weight <= 0:
             raise ValueError("blend weights must have a positive sum")
-        normalized_weights = normalized_weights / total_weight
+        normalized_weights = normalized_weights / max_weight
+        normalized_weights /= normalized_weights.sum()
 
     stacked = np.stack(matrices, axis=0)
     return np.tensordot(normalized_weights, stacked, axes=(0, 0))

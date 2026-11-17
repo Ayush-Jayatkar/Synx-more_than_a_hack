@@ -128,6 +128,39 @@ def test_missing_ball():
     assert np.isnan(result["distance_advantage"][2])
 
 
+def test_approach_speed_rejects_tracklet_discontinuities_but_keeps_valid_motion():
+    track = make_track()
+    result = possession_features.build_features(track)
+    # Frame 1 is a physically consistent ball/player movement observation.
+    assert np.isclose(result["home_approach_speed"][1], 12.5)
+
+    # The ball barely moves, but the nearest HOME tracklet jumps from 1 m to
+    # 20 m. That cannot be closing/receding motion for a continuous player.
+    discontinuous = make_track()
+    discontinuous["ball"][:2] = [[0.0, 0.0], [0.04, 0.0]]
+    discontinuous["ball_speed"][:2] = [np.nan, 1.0]
+    discontinuous["players"][0, 0] = [1.0, 0.0]
+    discontinuous["players"][1, 0] = [20.04, 0.0]
+    discontinuous["player_speed"][:2, 0] = 1.0
+    features = possession_features.build_features(discontinuous)
+    assert np.isnan(features["home_approach_speed"][1])
+
+
+def test_approach_state_carries_previous_nearest_speed_across_chunks():
+    track = make_track()
+    whole = possession_features.build_features(track)
+    _, state = possession_features.build_features(
+        {key: (value[:1] if key != "team" else value)
+         for key, value in track.items()}, return_state=True)
+    chunk = possession_features.build_features(
+        {key: (value[1:2] if key != "team" else value)
+         for key, value in track.items()}, previous=state)
+    assert np.array_equal(chunk["home_approach_speed"],
+                          whole["home_approach_speed"][1:2], equal_nan=True)
+    assert np.array_equal(chunk["away_approach_speed"],
+                          whole["away_approach_speed"][1:2], equal_nan=True)
+
+
 def test_custom_control_radius():
     result = possession_features.build_features(
         make_track(),
