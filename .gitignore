@@ -223,6 +223,7 @@ __marimo__/
 data/
 cache/
 outputs/
+Synx.csv
 *.mp4
 
 # Local tracking exports and intermediate data
@@ -232,3 +233,11 @@ outputs/
 # macOS metadata files (created on external drives)
 ._*
 .DS_Store
+
+# Final integration: local-only artefacts
+/Synx.csv
+evaluation/gt/
+*.npz
+*.npy
+*.pkl
+.claude/
