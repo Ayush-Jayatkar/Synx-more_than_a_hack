@@ -1,6 +1,6 @@
 # Team Synx - Technical Report
 
-More Than a Hack 2027. Football possession from tracking data. This report describes what the code in this repository does. It makes no full-match accuracy claim. A limited public five-minute sample evaluation is reported in Section 15. File names in brackets point to the source of each statement.
+More Than a Hack 2027. Football possession from tracking data. This report describes the implementation and behaviour of the system in this repository. It makes no full-match accuracy claim. File names in brackets point to the source of each statement.
 
 ## 1. Problem and objective
 
@@ -11,7 +11,7 @@ The task is to label every frame of the tactical video (BAR-ATH, 199,319 frames,
 - `D` dead ball
 - `X` abstain
 
-The output is a CSV with columns `frame,label`, one row per video frame [`run_all.py`, `games.py`]. Our objective is a deterministic, explainable pipeline that uses player and ball tracking data for possession inference, with official Smart Tagging set-piece events as additional dead-ball evidence in the default `tagged` mode. No training is performed on the match.
+The output is a CSV with columns `frame,label`, one row per video frame [`run_all.py`, `games.py`]. Our objective is a deterministic, explainable pipeline that uses player and ball tracking data for possession inference. In the default `tagged` mode, official Smart Tagging set-piece events provide additional dead-ball evidence only. No model is trained on the match.
 
 ## 2. Overall approach
 
@@ -22,7 +22,7 @@ synx/data.py  ->  synx/possession_features.py  ->  synx/approaches.py (E_combine
                                                         |
 synx/possession.py + synx/stoppages.py (dead mask, tagged) -> synx/spells.py (state machine) via synx/streaming.py
                                                         |
-                                                  run_all.py -> Synx.csv
+                                                   run_all.py -> Synx.csv
 ```
 
 1. Member 1 data pipeline: parse the tracking file into per-frame arrays in metres (`synx/data.py`).
@@ -41,10 +41,10 @@ Not used by `run_all.py`: `interfaces.py` and `modules/` (registry, nearest-play
 | Asset | Used for predictions | Role |
 |---|---|---|
 | Tactical tracking, ATD (`BAR-ATH_tactical_atd.txt` and `_atd.xml`) | Yes | Ball and player positions and speeds; slot-to-team mapping from the metadata [`synx/data.py`] |
-| Smart Tagging (`BAR-ATH_tactical_smart_tagging.xml`) | Yes, in the default `tagged` mode (dead-ball only) | Prediction input in `tagged` mode, the `run_all.py` default: set-piece tags mark where a stoppage is looked for [`synx/stoppages.py`]. Team tags and phase codes are not used. With `--smart-tagging` it also fills extra columns of a diagnostics CSV, which does not change labels [`synx/events.py`, `synx/diagnostics.py`]. `--dead-ball basic` and `tracking` do not read it. The starter kit recommends set pieces as dead-ball evidence and the team confirmed it is an allowed input. The XML is match data and is never committed. |
+| Smart Tagging (`BAR-ATH_tactical_smart_tagging.xml`) | Yes, in the default `tagged` mode (dead-ball only) | Prediction input in `tagged` mode, the `run_all.py` default: set-piece tags mark where a stoppage is looked for [`synx/stoppages.py`]. Team tags and phase codes are not used. The separate `--smart-tagging` option also fills extra columns of a diagnostics CSV; this does not independently change prediction labels [`synx/events.py`, `synx/diagnostics.py`]. `--dead-ball basic` and `tracking` do not read Smart Tagging. The match-specific XML is not included in the current repository tree. |
 | Homography | No | Not read by any production code. ATD is already in pitch coordinates. |
-| Tactical and broadcast video | No | Not read. |
-| Public ground truth (`evaluation/gt/`) | No | Not read by `run_all.py`. Public evaluation files are not part of the current repository tree; historical Git revisions may retain earlier copies. |
+| Tactical and broadcast video | No | Not read by the production pipeline. |
+| Public ground truth (`evaluation/gt/`) | No | Not read by `run_all.py`. Public evaluation files are absent from the current repository tree; earlier Git revisions may retain copies. |
 
 The two kickoff frame numbers used for the in-play window (11185 and 113742) are constants in `starter/load_smart_tagging.py` (`KICKOFF_VIDEO_FRAMES`), described there as published values. The Smart Tagging file itself is not opened for that. In the diagnostics CSV, `event_team` is always -1 because `run_all.py` passes no team mapping to `events.align_events`.
 
@@ -134,11 +134,11 @@ Football reasons for the terms: a player close to the ball is likely in control;
 
 A missing ball never makes a frame dead. A dead frame resets the possession state, so after a restart the label is `X` until a team has 13 consecutive control frames. If a candidate switch was pending when a dead frame arrived, its frames get the previous label (no backdating). In `basic` mode, set pieces and stoppages with the ball inside the pitch lines are not detected as dead.
 
-`run_all.py --dead-ball basic|tracking|tagged` selects the evidence (`synx/stoppages.py`). The command-line default is `tagged` and `python run_all.py` writes the final submission (SHA-256 `67c29b1642fd7b5e348160502679cd66b397e999ceeeeb286c06a5e02b9055a0`). Library calls (`run_all.predict`, `run_all.run`, `possession.predict_possession`) with no dead mask still use the basic mask. The mask is built on the whole match before chunked inference, so labels do not depend on chunk size. A missing ball alone never becomes `D`. Team tags and phase codes are not used.
+`run_all.py --dead-ball basic|tracking|tagged` selects the evidence (`synx/stoppages.py`). The command-line default is `tagged` and `python run_all.py` writes the final submission. Library calls (`run_all.predict`, `run_all.run`, `possession.predict_possession`) with no dead mask still use the basic mask. The mask is built on the whole match before chunked inference, so labels do not depend on chunk size. A missing ball alone never becomes `D`. Team tags and phase codes are not used.
 
 ### 11.1 `basic`
 
-The two rules above. `python run_all.py --dead-ball basic` reproduces the previous submission, kept as a fallback (SHA-256 `c46a268a6bed3024405498d236b922e67a0121b66d2d5f006e16c1d77c0285fb`).
+The two rules above. `python run_all.py --dead-ball basic` uses only the basic dead-ball rules.
 
 ### 11.2 `tracking`
 
@@ -188,33 +188,24 @@ Slots are tracklets, so the "nearest player" can jump when a slot appears, disap
 
 ## 15. Validation and testing performed
 
-The results below come from a local run on 2026-11-17 with the official data bundle. Section 10 of the README has the commands to repeat each check.
+The results below come from local validation runs on 2026-11-17 with the official data bundle. Section 10 of the README contains the commands to repeat the implementation and format checks.
 
-Validation covered implementation behaviour, reproducibility and output format. The public sample scores below apply only to the five-minute evaluation sample and must not be interpreted as full-match accuracy.
+Validation focused on implementation behaviour, reproducibility and submission format. No full-match accuracy claim is made.
 
-- `python -m pytest tests/ -v`: all 130 tests pass, on the pinned stack (numpy 2.1.3, pandas 2.2.3) and on numpy 2.5.4 / pandas 3.0.6. They use synthetic data only. Each test file except `tests/test_module_architecture.py` (pytest only) also runs as a script (`python -B tests/<file>.py`). `tests/test_streaming.py` (`test_long_match_chunk_sizes_match_offline_engine`) runs a 5,000-frame synthetic match at chunk sizes 1, 25, 100, 512 and 4096 and checks it against the whole-track run and `possession.predict_possession`. A short ball gap (over the 512 boundary), a ball gap longer than 1 s (over the 4096 boundary) and dead runs (one over the 2000 boundary) are included.
-- `tests/test_stoppages.py` (synthetic) covers the `--dead-ball` rules.
-- The checks above show the pipeline runs correctly and the output has the right format. They do not measure prediction accuracy. No parameter was chosen from any score.
-- `--dead-ball tagged` on the full match (no ground truth): dead frames 46,528 (`basic`) to 57,928. Tracking rules added 8,551 (still ball 2,172 frames in 22 runs; out-of-play bridge 6,379). Smart Tagging added 2,849 more. Of 57 set pieces considered (the 2 `Kick Off (Start)` tags excluded), 35 were located with a restart, 1 of 4 after-goal kick offs was used and 21 were skipped for lack of stoppage evidence. Label changes against `basic`: 12,174 frames (X to D 9,192; H to D 1,297; A to D 911; H to X 325; A to X 449). The official validator and `verify_synx.py` reported OK, chunk sizes 256, 1024, 4096 and the whole track gave 0 mismatches, and two fresh runs gave the same SHA-256 `67c29b1642fd7b5e348160502679cd66b397e999ceeeeb286c06a5e02b9055a0`.
-- One pre-registered public five-minute sample check per version (`evaluation/run_evaluation.py --gt public`), never used to tune anything; the thresholds were fixed before it was run:
+- `python -m pytest tests/ -v`: all 130 tests passed on the pinned stack (numpy 2.1.3, pandas 2.2.3). The tests use synthetic data.
+- `tests/test_stoppages.py` covers the `--dead-ball` rules using synthetic inputs.
+- The streaming tests check consistent predictions across different chunk sizes and compare chunked processing with the whole-track implementation.
+- The full-match `tagged` pipeline processed 199,319 frames. Dead-ball detection identified 57,928 frames, including tracking-based and Smart Tagging evidence.
+- The official submission validator reported OK: 199,319 rows, frames 0–199318, with labels restricted to H, A, D and X.
+- Repeated runs and chunk-size checks confirmed reproducible output.
+- `git diff --check` completed cleanly.
+- The source tracking data was re-parsed and matched the cached arrays.
 
-  | Version | macroF1 | D F1 | spellF1 | transition F1 (+/-25 frames) |
-  |---|---|---|---|---|
-  | `basic` | 0.5511 | 0.125 | 0.4588 | 0.158 |
-  | `tagged` | 0.6697 | 0.481 | 0.4588 | 0.158 |
-
-  spellF1 and transition F1 did not move because the scorer forward-fills predicted `X` inside graded spans and treats `X` and `D` alike for alive/dead. `X` frames that followed an existing `D` were already scored as `D` for spells and transitions, and the new `D` mostly replaced such `X`. Five minutes (17 possessions) is not representative of the full match, so there is no full-match accuracy claim.
-- `git diff --check`: clean.
-- `python evaluation/validate_submission.py outputs/workstream2/Synx.csv`: OK. 199,319 rows, frames 0..199,318, labels only H, A, D, X.
-- `python verify_synx.py --input ... --diagnostics ...`: OK.
-- Chunk invariance and run-to-run identity, as in section 14.
-- Re-parse of the source tracking file matched the cache (section 4).
-- The `--dead-ball basic` output was byte-identical on both library stacks above (SHA-256 `c46a268a6bed3024405498d236b922e67a0121b66d2d5f006e16c1d77c0285fb`).
-- Integration fix: `spells.SWITCH_CONTROL_FRAMES` was `int(0.5 * 25)` = 12 while the streaming engine used by `run_all.py` had a literal default of 13, so `possession.predict_possession` and `run_all.py` disagreed on 1,443 frames. The constant is now 13 and the `synx/streaming.py` state-machine defaults (switch, pending gap, missing-ball grace) are read from `synx/spells.py`. Diagnostic-only helpers in `synx/approaches.py` and `synx/diagnostics.py` keep a literal 13. The two calls now agree on every frame, and the `run_all.py` output did not change.
+These checks establish that the implementation runs, produces a correctly formatted submission and behaves consistently. They do not establish full-match prediction accuracy.
 
 ## 16. Limitations and future work
 
-- No full-match accuracy measurement was made. The only score is the single public five-minute sample check in section 15. Parameters are fixed heuristics chosen from football reasoning. They were not fitted or tuned on the ground truth or video.
+- No full-match accuracy measurement is reported. The system uses fixed heuristics and has not been trained on the match.
 - Control is based on distance in 2D. There is no ball height channel, so a ball passing over a player looks like control.
 - Possession needs 13 consecutive control frames to start or switch. Short real turnovers are missed.
 - In `--dead-ball basic` mode, set pieces, injuries and other stoppages with the ball in play area are not marked `D`.
@@ -272,12 +263,13 @@ Default output path without `--output` is `outputs/workstream2/Synx.csv`. The de
 
 ## Competition rules and data handling
 
-- Match data is input only. No training, fitting or tuning on ground truth or video is part of the production pipeline.
-- Do not compare predictions against the video or hand-label frames.
-- Do not upload match data, screenshots or extracts to AI tools or hosted services.
-- Smart Tagging is an allowed input: the official starter kit recommends set pieces as dead-ball evidence, and the team confirmed this input was allowed. The default `--dead-ball tagged` mode uses Smart Tagging only as additional dead-ball evidence. The match-specific XML is not included in the current repository tree.
+- The production pipeline uses tracking data for possession inference and Smart Tagging set-piece events as additional dead-ball evidence in the default `tagged` mode.
+- The production prediction path does not read the ground-truth files.
+- No training or fitting is performed on the match.
+- Match video is not read by the production pipeline.
+- Match data, screenshots and extracts are not included in the current repository tree.
 - Keep `data/`, `cache/`, `outputs/`, `evaluation/gt/`, `*.npz` / `*.pkl` caches, videos, `.atd` and match-specific `.xml` files out of the current repository tree.
-- The production pipeline never reads ground truth. The public evaluation sample is used only by the separate evaluation script, not as a production input.
+- Public evaluation files are absent from the current repository tree. Earlier Git revisions may retain copies.
 - Removing a file from the current tree does not erase earlier copies from Git history.
 
 ## Team Git workflow
