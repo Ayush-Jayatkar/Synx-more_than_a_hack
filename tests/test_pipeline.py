@@ -286,7 +286,7 @@ def test_uncertain_frames_interrupt_switch():
 
 
 def test_brief_unseen_gap_bridges_pending_switch_without_counting_as_control():
-    ctrl = np.array([HOME] * 20 + [AWAY] * 5 + [NOBODY] + [AWAY] * 7)
+    ctrl = np.array([HOME] * 20 + [AWAY] * 5 + [NOBODY] + [AWAY] * (spells.SWITCH_CONTROL_FRAMES - 5))
     dead = np.zeros(len(ctrl), dtype=bool)
     seen = np.ones(len(ctrl), dtype=bool)
     seen[25] = False
@@ -294,7 +294,7 @@ def test_brief_unseen_gap_bridges_pending_switch_without_counting_as_control():
     labels = spells.label_frames(ctrl, dead, seen)
 
     # The unseen frame bridges the candidate spell, but confirmation still
-    # requires 12 observed AWAY-control frames.
+    # requires SWITCH_CONTROL_FRAMES observed AWAY-control frames.
     assert (labels[:20] == "H").all()
     assert (labels[20:] == "A").all()
 

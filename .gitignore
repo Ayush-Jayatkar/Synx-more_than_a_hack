@@ -233,3 +233,11 @@ Synx.csv
 # macOS metadata files (created on external drives)
 ._*
 .DS_Store
+
+# Final integration: local-only artefacts
+/Synx.csv
+evaluation/gt/
+*.npz
+*.npy
+*.pkl
+.claude/

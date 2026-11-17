@@ -1,191 +1,229 @@
-# Synx-more_than_a_hack
+# Synx - More Than a Hack 2027
 
-**Football Possession Prediction Using Tracking Data and Rule-Based Temporal Smoothing**
+Frame-by-frame football possession labels from player and ball tracking data. Team Synx.
 
-## About the Project
+## 1. Overview
 
-Synx is a football analytics project focused on developing an intelligent system for frame-by-frame possession prediction.
-
-The system aims to identify which team controls the ball throughout a match using player tracking information, ball movement and temporal patterns.
-
-### Core Objectives
-
-- Predict team possession at every frame.
-- Identify possession changes and dead-ball situations.
-- Handle missing and noisy tracking observations.
-- Apply rule-based temporal smoothing (hysteresis, minimum spell length) for consistent predictions.
-- Develop a reliable and reproducible prediction pipeline.
-
-### Prediction Classes
+For every frame of the tactical video (BAR-ATH, 199,319 frames at 25 FPS) the pipeline writes one label:
 
 | Label | Meaning |
 |---|---|
-| H | Home team possession |
-| A | Away team possession |
-| D | Dead ball |
-| X | Abstain |
+| H | Home team has possession |
+| A | Away team has possession |
+| D | Dead ball (match not in play, or ball clearly outside the pitch) |
+| X | Abstain (no established possession, or the ball has been unseen too long) |
 
-### Technology Stack
+The method is rule-based. It has no machine learning, no training and no fitted parameters. It uses the
+tracking data (ATD) only. The technical report is in [Synx.md](Synx.md).
 
-- Python
-- NumPy and Pandas
-- Git and GitHub
-
-No machine learning: the final pipeline combines tracking-derived evidence with a temporal possession state machine.
-
-## Architecture
-
-`run_all.py` is the final submission-generation pipeline. It loads tracking data, derives the default dead-ball mask, and feeds the Workstream 2 features and possession evidence into the chunked streaming state machine. That engine handles possession switches, missing-ball abstention, and spell continuity, then writes one `H`, `A`, `D`, or `X` label per frame in the official `frame,label` format. The default output is `outputs/workstream2/Synx.csv`; chunk size is configurable, and existing outputs are protected unless `--overwrite` is supplied. Optional Smart Tagging context produces a local diagnostics sidecar and does not change predictions.
-
-Validate a generated CSV separately with `python synx_validate.py <submission.csv>`. This wrapper calls the official format validator in `evaluation/validate_submission.py`; validation does not use ground truth. `modules/synx_combined.py` is a separately tested H/A/D probability adapter for the advanced evidence and is not used by the final submission pipeline. `interfaces.py` defines the optional module contract, probability normalization and validation, and probability blending; `modules/registry.py` provides a small registry for constructing the advanced adapter or optional baseline. These helpers are for independent module evaluation and are not wired into `run_all.py`.
-
-`starter/baseline.py` is the original nearest-player reference. `modules/nearest_player.py` adapts that optional baseline to the shared module contract for synthetic/offline comparisons; neither baseline is the final prediction algorithm or used by `run_all.py`.
-
-## Tracking provenance
-
-On 2026-11-17, the local cache was parsed again from the original tactical
-ATD and metadata in the permitted Metrica data bundle, without using video or
-ground-truth files. The source contained 199,319 sequential one-based ATD
-frames. The resulting ball coordinates, player coordinates, player speeds,
-team assignments, and NaN missing-value locations matched
-`cache/BAR-ATH_tracking.npz` exactly. Cache frame `i` corresponds to ATD
-`IdFrame i + 1` at 25 FPS. The provenance report is local-only and is not an
-accuracy evaluation.
-
-## Project Structure
+## 2. Architecture
 
 ```text
-Synx-more_than_a_hack/
-│
-├── evaluation/
-│   ├── results/
-│   ├── possession_metrics.py
-│   ├── run_evaluation.py
-│   └── validate_submission.py
-│
-├── starter/
-│   └── baseline.py          optional nearest-player reference
-│
-├── synx/
-│   ├── data.py              tracking input and cache
-│   ├── pitch.py             pitch geometry and in-play windows
-│   ├── possession_features.py distance, movement, and spatial features
-│   ├── approaches.py        possession evidence
-│   ├── possession.py        prediction API and dead-ball handling
-│   ├── spells.py            temporal state machine and spell handling
-│   ├── streaming.py         stateful chunk processing
-│   ├── events.py            optional event-context alignment
-│   └── diagnostics.py       local diagnostic reports
-│
-├── interfaces.py            shared module contract and probability helpers
-├── modules/
-│   ├── registry.py          optional module registry
-│   ├── nearest_player.py    optional nearest-player baseline
-│   └── synx_combined.py     H/A/D probability adapter
-├── tests/                    synthetic feature, probability, and streaming checks
-├── run_all.py               inference, diagnostics and format validation
-├── Synx.md                  technical report (upload to the form)
-├── games.py
+data/tactical/*_atd.xml + *_atd.txt
+        |
+        v
+synx/data.py             parse ATD, convert to metres, cache (cache/BAR-ATH_tracking.npz)
+        |
+        v
+synx/possession.py       dead-ball mask D (synx/pitch.py: half windows, ball beyond pitch lines)
+synx/possession_features.py   nearest-player distances, ball motion, approach speed
+        |
+        v
+synx/approaches.py       E_combined frame-level control evidence (synx/ball_possession.py)
+        |
+        v
+synx/spells.py           possession state machine: hysteresis, backdated switch, missing-ball grace
+synx/streaming.py        runs the above in chunks, same labels for any chunk size
+        |
+        v
+run_all.py  ->  outputs/workstream2/Synx.csv   (frame,label)
+```
+
+`run_all.py` calls `streaming.predict_chunked`. `synx.possession.predict_possession` is the same engine as a
+library call and gives the same labels.
+
+Optional, not needed for the submission:
+
+- `--smart-tagging` also writes a diagnostics CSV (`frame_diagnostics.csv`) next to the output. It does not change labels.
+- `interfaces.py` and `modules/` are offline helpers (module contract, probability adapter, nearest-player
+  baseline). `run_all.py` does not use them. From `starter/`, the pipeline uses only `team_of_each_track`
+  (`starter/baseline.py`, slot-to-team mapping) and `KICKOFF_VIDEO_FRAMES` (`starter/load_smart_tagging.py`); the
+  nearest-player baseline itself is not run.
+- `synx/missing_ball.py` and `synx/tracking_diagnostics.py` are not used by `run_all.py`.
+
+## 3. Folder structure
+
+Tracked files only. `data/`, `cache/` and `outputs/` are created locally and are gitignored.
+
+```text
+.
+├── run_all.py               entry point: writes Synx.csv
+├── games.py                 per-game constants, data folder lookup (MTAH_DATA_DIR)
+├── synx_validate.py         wrapper around the official format validator
+├── verify_synx.py           technical checks on Synx.csv + diagnostics CSV
+├── interfaces.py            optional module contract (not used by run_all.py)
 ├── requirements.txt
-├── LICENSE
-├── .gitignore
-└── README.md
+├── Synx.md                  technical report
+├── synx/
+│   ├── data.py              ATD parsing, metres, cache
+│   ├── pitch.py             in-play window, ball-outside-pitch test
+│   ├── possession.py        dead mask and library API
+│   ├── possession_features.py   distances, motion, approach speed
+│   ├── approaches.py        control evidence models (E_combined is used)
+│   ├── ball_possession.py   E_combined score formula
+│   ├── spells.py            possession state machine
+│   ├── streaming.py         chunked engine
+│   ├── events.py            optional Smart Tagging alignment (diagnostics only)
+│   ├── diagnostics.py       optional diagnostics CSV writer
+│   ├── missing_ball.py      not used by run_all.py
+│   └── tracking_diagnostics.py  not used by run_all.py
+├── modules/                 optional offline adapters (not used by run_all.py)
+├── starter/                 organizer starter code (load_atd.py, baseline.py, notebooks, ...)
+├── evaluation/              organizer files: validate_submission.py, possession_metrics.py,
+│                            run_evaluation.py, results/ (baseline_*.csv only)
+├── tests/                   pytest suites (synthetic data only; no match data needed)
+└── docs/                    WORKSTREAM1.md, WORKSTREAM2.md, PROBABILITY_INTEGRATION.md
 ```
 
-## Getting Started
+## 4. Python and dependencies
 
+- Python 3.12 (as stated in `requirements.txt`). The 2026-11-17 validation run used Python 3.13.7.
+- `numpy==2.1.3`, `pandas==2.2.3` (pinned in `requirements.txt`).
+- `pytest` is needed only to run the tests. It is not in `requirements.txt`; install it with `pip install pytest`.
 
-### 1. Clone the Repository
+## 5. Environment setup
 
-```bash
-git clone https://github.com/Ayush-Jayatkar/Synx-more_than_a_hack.git
-```
-
-### 2. Navigate to the Project
-
-```bash
-cd Synx-more_than_a_hack
-```
-
-### 3. Create a Virtual Environment
-
-**Windows:**
+Windows (PowerShell):
 
 ```powershell
 python -m venv .venv
 .venv\Scripts\activate
 ```
 
-**Linux / macOS:**
+Linux / macOS:
 
 ```bash
 python3 -m venv .venv
 source .venv/bin/activate
 ```
 
-### 4. Install Dependencies
+## 6. Install
 
 ```bash
 python -m pip install --upgrade pip
 pip install -r requirements.txt
+pip install pytest        # only for the tests
 ```
 
-### 5. Point to the data (not in this repo)
+## 7. Data path
+
+The match data is not in this repository. Download the official BAR-ATH bundle from the More Than a Hack 2027 organisers (Metrica Sports) and put it in `./data`, or point `MTAH_DATA_DIR` at it
+(`games.py` reads this variable; the default is `./data` next to `games.py`).
 
 ```bash
-export MTAH_DATA_DIR=/path/to/data      # macOS / Linux
-$env:MTAH_DATA_DIR = "D:\\data"         # Windows PowerShell
+export MTAH_DATA_DIR=/path/to/mtah2027          # Linux / macOS
+```
+```powershell
+$env:MTAH_DATA_DIR = "D:\mtah2027"              # Windows PowerShell
 ```
 
-### 6. Reproduce Synx.csv
+The default run reads these two files:
+
+```text
+<data dir>/tactical/BAR-ATH_tactical_atd.xml
+<data dir>/tactical/BAR-ATH_tactical_atd.txt
+```
+
+`--smart-tagging` additionally reads `<data dir>/tactical/BAR-ATH_tactical_smart_tagging.xml`.
+Homography, video and the `broadcast/` folder are not read.
+
+The first run parses the ATD and writes `cache/BAR-ATH_tracking.npz`. The cache is rebuilt automatically when the
+source file size or modification time changes, or when `CACHE_VERSION` in `synx/data.py` changes.
+
+## 8. Run
 
 ```bash
-python run_all.py --chunk-size 4096 --smart-tagging
+python run_all.py
 ```
 
-This writes `outputs/workstream2/Synx.csv` (`frame,label`) and, with `--smart-tagging`,
-a frame-level diagnostics sidecar under `outputs/workstream2/`. Validate the CSV separately
-with `python synx_validate.py outputs/workstream2/Synx.csv`. Use `--overwrite` only when
-intentionally replacing an existing output. Local outputs and caches are ignored by Git.
+Writes `outputs/workstream2/Synx.csv`. An existing output is not replaced unless `--overwrite` is given.
 
-The first run parses the tracking file and caches it in `cache/` (gitignored); later runs are fast.
+Options (from `run_all.py`):
 
-Self-checks on synthetic data (no match data needed):
+| Option | Default | Effect |
+|---|---|---|
+| `--output PATH` | `outputs/workstream2/Synx.csv` | exact path of the submission CSV |
+| `--overwrite` | off | allow replacing an existing output / diagnostics file |
+| `--chunk-size N` | 4096 | frames per streaming chunk (does not change the labels) |
+| `--smart-tagging` | off | also write `frame_diagnostics.csv` in the output folder |
+
+## 9. Regenerate Synx.csv
 
 ```bash
-python tests/test_data.py
-python tests/test_pipeline.py
-python tests/test_possession_features.py
-python tests/test_probability_module.py
-python tests/test_streaming.py
+python run_all.py --output Synx.csv --overwrite
 ```
 
-### 7. Open in VS Code
+Other examples:
 
 ```bash
-code .
+python run_all.py --chunk-size 1024
+python run_all.py --smart-tagging --overwrite   # also writes outputs/workstream2/frame_diagnostics.csv
 ```
 
-## Git Workflow
+`Synx.csv` in the repository root is gitignored, like everything under `outputs/`.
 
-One branch per person, merged by pull request. Don't edit another person's module without telling them.
+## 10. Tests and validation
 
 ```bash
-git checkout main && git pull origin main
-git checkout -b your-name/module
-git add synx/your_module.py
-git commit -m "Describe your changes"
-git push origin your-name/module      # then open a PR
+python -m pytest tests/ -v
+python evaluation/validate_submission.py outputs/workstream2/Synx.csv
+python synx_validate.py outputs/workstream2/Synx.csv
+python verify_synx.py --input outputs/workstream2/Synx.csv --diagnostics outputs/workstream2/frame_diagnostics.csv
 ```
 
-## Competition Rules (read before coding)
+Reproducibility checks (labels must not depend on chunk size; two runs must be byte-identical):
 
-- Match data is **input only**. Never train, fit or tune on the ground truth or the video.
-- Never compare our output with the video, and never hand-label frames.
-- The public 5-min ground truth is only for checking the pipeline runs.
-- Never paste or upload match data, screenshots or extracts into AI tools.
-- `data/`, videos, `.atd` and `.xml` files are git-ignored. Keep it that way.
+```bash
+python run_all.py --chunk-size 256  --output outputs/chunk256.csv  --overwrite
+python run_all.py --chunk-size 4096 --output outputs/chunk4096.csv --overwrite
+python run_all.py --output outputs/hash_run1.csv --overwrite
+python run_all.py --output outputs/hash_run2.csv --overwrite
+```
+```powershell
+(Get-FileHash .\outputs\chunk256.csv).Hash -eq (Get-FileHash .\outputs\chunk4096.csv).Hash
+(Get-FileHash .\outputs\hash_run1.csv).Hash -eq (Get-FileHash .\outputs\hash_run2.csv).Hash
+```
 
----
+Both lines print `True`.
 
-**Team Synx**
+- The tests use synthetic arrays only. They do not need match data.
+- `validate_submission.py` and `synx_validate.py` check the file format only (row count, frame numbers, labels). They use no ground truth.
+- `verify_synx.py` requires `--diagnostics`. Create that file first with the `--smart-tagging` command in
+  section 9. The script checks that the two files have the same frames. It writes `verification_report.json`
+  next to the `--input` file.
+
+## 11. Output format
+
+`Synx.csv` is a CSV with header `frame,label` and 199,319 rows. `frame` runs 0 to 199,318 and is the tactical
+video frame index. `label` is one of `H`, `A`, `D`, `X` (see section 1). Frame `i` uses ATD `IdFrame` `i + 1`.
+
+## Competition rules (short)
+
+- Match data is input only. No training, fitting or tuning on ground truth or video.
+- Do not compare output with the video and do not hand-label frames.
+- Do not paste or upload match data, screenshots or extracts into AI tools or hosted services.
+- `data/`, `cache/`, `outputs/`, `evaluation/gt/`, `*.npz`/`*.pkl` caches, videos, `.atd` and `.xml` files stay out of Git.
+- Ground truth (`evaluation/gt/`) is kept locally only. The pipeline never reads it.
+
+## Team git workflow (short)
+
+One branch per person, merged by pull request. Do not edit another person's module without telling them.
+
+```bash
+git checkout -b your-name/topic
+git add <files>
+git commit -m "Describe your change"
+git push origin your-name/topic      # then open a PR
+```
+
+Repository: https://github.com/Ayush-Jayatkar/Synx-more_than_a_hack

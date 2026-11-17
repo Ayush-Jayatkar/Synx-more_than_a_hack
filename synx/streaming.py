@@ -25,9 +25,9 @@ class StreamOutput:
 class StreamingPossessionEngine:
     """Incremental combined predictor with exact chunk-boundary continuity."""
 
-    def __init__(self, feature_kwargs=None, control_kwargs=None, switch_frames=13,
-                 approach="E_combined", pending_gap_frames=1,
-                 missing_ball_grace_frames=25):
+    def __init__(self, feature_kwargs=None, control_kwargs=None, switch_frames=spells.SWITCH_CONTROL_FRAMES,
+                 approach="E_combined", pending_gap_frames=spells.PENDING_GAP_FRAMES,
+                 missing_ball_grace_frames=spells.MISSING_BALL_GRACE_FRAMES):
         self.feature_kwargs = dict(feature_kwargs or {})
         self.control_kwargs = dict(control_kwargs or {})
         self.machine = spells.PossessionStateMachine(
@@ -77,9 +77,9 @@ class StreamingPossessionEngine:
 
 
 def iter_track_chunks(track, dead, chunk_size=4096, feature_kwargs=None,
-                      control_kwargs=None, switch_frames=13,
-                      approach="E_combined", pending_gap_frames=1,
-                      missing_ball_grace_frames=25):
+                      control_kwargs=None, switch_frames=spells.SWITCH_CONTROL_FRAMES,
+                      approach="E_combined", pending_gap_frames=spells.PENDING_GAP_FRAMES,
+                      missing_ball_grace_frames=spells.MISSING_BALL_GRACE_FRAMES):
     """Yield ``(start_frame, labels, StreamOutput)`` across any chunk size."""
     ball = np.asarray(track["ball"])
     if ball.ndim != 2 or ball.shape[1] != 2:
@@ -105,9 +105,9 @@ def iter_track_chunks(track, dead, chunk_size=4096, feature_kwargs=None,
 
 
 def predict_chunked(track, dead, chunk_size=4096, feature_kwargs=None,
-                    control_kwargs=None, switch_frames=13,
-                    approach="E_combined", pending_gap_frames=1,
-                    missing_ball_grace_frames=25):
+                    control_kwargs=None, switch_frames=spells.SWITCH_CONTROL_FRAMES,
+                    approach="E_combined", pending_gap_frames=spells.PENDING_GAP_FRAMES,
+                    missing_ball_grace_frames=spells.MISSING_BALL_GRACE_FRAMES):
     """Collect a complete deterministic label array from the streaming engine."""
     n = len(track["ball"])
     labels = np.empty(n, dtype="<U1")
@@ -125,8 +125,8 @@ def predict_chunked(track, dead, chunk_size=4096, feature_kwargs=None,
 
 def simulate_realtime(track, dead, frame_limit=None, pace=True, fps=25,
                       feature_kwargs=None, control_kwargs=None,
-                      switch_frames=13, pending_gap_frames=1,
-                      missing_ball_grace_frames=25):
+                      switch_frames=spells.SWITCH_CONTROL_FRAMES, pending_gap_frames=spells.PENDING_GAP_FRAMES,
+                      missing_ball_grace_frames=spells.MISSING_BALL_GRACE_FRAMES):
     """Feed one frame at a time, optionally pacing calls to the target frame rate.
 
     Returns labels and timing diagnostics. ``frame_limit`` is useful for a

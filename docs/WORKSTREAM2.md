@@ -2,7 +2,7 @@
 
 ## Architecture
 
-`data.load()` remains the only ATD parser. It returns metre coordinates aligned to tactical-video frames. `possession_features.build_features()` computes team-level distances, movement, pressure and ball vectors without treating track slots as persistent players. `approaches.py` exposes independent frame-local evidence models. `spells.PossessionStateMachine` maintains temporal state and buffers unconfirmed candidate frames so confirmed changes are backdated without changing results at chunk boundaries. `streaming.py` provides chunked inference and a paced frame-by-frame simulation. `possession.predict_possession()` is the application interface; `run_all.py` writes and validates a submission.
+`data.load()` remains the only ATD parser. It returns metre coordinates aligned to tactical-video frames. `possession_features.build_features()` computes team-level distances, movement, pressure and ball vectors without treating track slots as persistent players. `approaches.py` exposes independent frame-local evidence models. `spells.PossessionStateMachine` maintains temporal state and buffers unconfirmed candidate frames so confirmed changes are backdated without changing results at chunk boundaries. `streaming.py` provides chunked inference and a paced frame-by-frame simulation. `possession.predict_possession()` is the application interface; `run_all.py` writes a submission (format validation is a separate command).
 
 No homography is needed: the ATD coordinates are already in pitch space. No label training or threshold fitting is used. Confidence values are score separations in metres, not calibrated probabilities.
 
@@ -77,28 +77,23 @@ Tests use synthetic arrays and temporary synthetic files. They cover control, sw
 
 ## Full local run and outputs
 
-Set `MTAH_DATA_DIR` to the permitted local data bundle, then run from the repository root:
+Set `MTAH_DATA_DIR` to the permitted local data bundle (or place it in `./data`), then run from the repository root:
 
 ```powershell
-$env:MTAH_DATA_DIR = 'D:\path\to\mtah2027'
+$env:MTAH_DATA_DIR = 'D:\mtah2027'
 python run_all.py --chunk-size 4096 --smart-tagging
 ```
 
-By default this writes `outputs/workstream2/Synx.csv`, validates exactly the configured frame count with `evaluation/validate_submission.py`, and writes local `benchmark.json`, `approach_comparison.json`, `frame_diagnostics.csv`, and `validation.txt` alongside it. `outputs/` and `cache/` are ignored by Git. An existing output is not overwritten without `--overwrite`. Use `--no-comparison` or `--no-frame-report` to skip reports.
+By default this writes `outputs/workstream2/Synx.csv`. With `--smart-tagging` it also writes `frame_diagnostics.csv` in the same folder. `run_all.py` does not validate the file and writes no other report. An existing output is not overwritten without `--overwrite`; `--output` sets the CSV path. `outputs/` and `cache/` are ignored by Git.
 
-Run a short paced simulation without writing a submission:
-
-```powershell
-python run_all.py --simulate-realtime --frames 250 --no-comparison
-```
-
-Run the complete paced simulation only when you intend to wait through the match duration:
+Validate the format afterwards (no ground truth is used):
 
 ```powershell
-python run_all.py --simulate-realtime
+python evaluation\validate_submission.py outputs\workstream2\Synx.csv
+python synx_validate.py outputs\workstream2\Synx.csv
 ```
 
-The validator checks only submission format. Do not run `evaluation/run_evaluation.py` for this workstream.
+`streaming.simulate_realtime` and `diagnostics.benchmark_chunked` are library functions. `run_all.py` has no command-line option for them. Do not run `evaluation/run_evaluation.py` for this workstream.
 
 ## Competition compliance and limitations
 

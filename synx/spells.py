@@ -2,7 +2,7 @@
 import numpy as np
 from synx.data import AWAY, HOME, NOBODY
 FPS = 25
-SWITCH_CONTROL_FRAMES = int(0.5 * FPS)
+SWITCH_CONTROL_FRAMES = 13  # 0.5 s at 25 FPS rounded up; the value run_all.py has always used
 PENDING_GAP_FRAMES = 1
 MISSING_BALL_GRACE_FRAMES = FPS
 MIN_SPELL_FRAMES = FPS
