@@ -22,7 +22,7 @@ The method is rule-based. No model is trained and no parameter is fitted. The pr
 ```text
 synx/data.py  ->  synx/possession_features.py  ->  synx/approaches.py (E_combined)
                                                         |
-synx/possession.py (dead mask) -----------------------> synx/spells.py (state machine) via synx/streaming.py
+synx/possession.py + synx/stoppages.py (dead mask, tagged) -> synx/spells.py (state machine) via synx/streaming.py
                                                         |
                                                   run_all.py -> Synx.csv
 ```
@@ -30,7 +30,7 @@ synx/possession.py (dead mask) -----------------------> synx/spells.py (state ma
 1. Member 1 data pipeline: parse the tracking file into per-frame arrays in metres (`synx/data.py`).
 2. Features: per frame, the nearest and second-nearest player of each team, ball motion, approach speed (`synx/possession_features.py`).
 3. Frame-level control evidence: Approach E_combined decides, frame by frame, whether the home team, the away team or nobody controls the ball (`synx/approaches.py`, `synx/ball_possession.py`).
-4. Dead-ball mask: half windows and ball beyond the pitch lines (`synx/possession.py`, `synx/pitch.py`).
+4. Dead-ball mask: half windows and ball beyond the pitch lines (`synx/possession.py`, `synx/pitch.py`). `run_all.py` uses `--dead-ball tagged` by default, which adds tracking evidence and Smart Tagging set pieces (`synx/stoppages.py`, section 11). `--dead-ball basic` keeps only the first two.
 5. State machine: turns frame-level control into possession spells with hysteresis (`synx/spells.py`).
 6. Chunked engine: runs steps 2 to 5 chunk by chunk (`synx/streaming.py`). `run_all.py` calls `streaming.predict_chunked`.
 
@@ -46,7 +46,7 @@ not imported by the production path.
 | Asset | Used for predictions | Role |
 |---|---|---|
 | Tactical tracking, ATD (`BAR-ATH_tactical_atd.txt` and `_atd.xml`) | Yes | Ball and player positions and speeds; slot-to-team mapping from the metadata [`synx/data.py`] |
-| Smart Tagging (`BAR-ATH_tactical_smart_tagging.xml`) | No | Read only with `--smart-tagging`, to fill extra columns of a diagnostics CSV [`synx/events.py`, `synx/diagnostics.py`]. It does not change labels. |
+| Smart Tagging (`BAR-ATH_tactical_smart_tagging.xml`) | Yes, in the default `tagged` mode (dead-ball only) | Prediction input in `tagged` mode, the `run_all.py` default: set-piece tags mark where a stoppage is looked for [`synx/stoppages.py`]. Team tags and phase codes are not used. With `--smart-tagging` it also fills extra columns of a diagnostics CSV, which does not change labels [`synx/events.py`, `synx/diagnostics.py`]. `--dead-ball basic` and `tracking` do not read it. The starter kit recommends set pieces as dead-ball evidence and the team confirmed it is an allowed input. The XML is match data and is never committed. |
 | Homography | No | Not read by any production code. ATD is already in pitch coordinates. |
 | Tactical and broadcast video | No | Not read. |
 | Public ground truth (`evaluation/gt/`) | No | Not read by `run_all.py`. Kept locally only, not in Git. |
@@ -185,8 +185,45 @@ detected.
 
 A missing ball never makes a frame dead. A dead frame resets the possession state, so after a restart the label is `X`
 until a team has 13 consecutive control frames. If a candidate switch was pending when a dead frame arrived, its frames
-get the previous label (no backdating). Set pieces and stoppages with the ball inside the pitch lines are not
-detected as dead.
+get the previous label (no backdating). In `basic` mode, set pieces and stoppages with the ball inside the pitch
+lines are not detected as dead.
+
+`run_all.py --dead-ball basic|tracking|tagged` selects the evidence (`synx/stoppages.py`). The command-line default is
+`tagged` and `python run_all.py` writes the final submission (SHA-256
+`67c29b1642fd7b5e348160502679cd66b397e999ceeeeb286c06a5e02b9055a0`). Library calls (`run_all.predict`, `run_all.run`,
+`possession.predict_possession`) with no dead mask still use the basic mask. The mask is built on the whole match before chunked inference, so labels do not depend on
+chunk size. A missing ball alone never becomes `D`. Team tags and phase codes are not used.
+
+### 11.1 `basic`
+
+The two rules above. `python run_all.py --dead-ball basic` reproduces the previous submission, kept as a fallback (SHA-256
+`c46a268a6bed3024405498d236b922e67a0121b66d2d5f006e16c1d77c0285fb`).
+
+### 11.2 `tracking`
+
+`basic` plus two tracking-only rules:
+
+- Still ball: the ball is seen and its filtered speed is below 0.5 m/s for at least 2 s (50 frames). In open play the
+  ball is almost never motionless for 2 s; a ball placed for a free kick, goal kick or corner is.
+- Out-of-play bridge: unseen frames that directly follow a frame where the ball was seen out of play stay `D`, for at
+  most 30 s. The ball is being retrieved off camera, and a restart normally follows within 30 s.
+
+### 11.3 `tagged` (default)
+
+`tracking` plus Smart Tagging set pieces. A tag window is a fixed 35 s (5 s for kick offs), so it is never copied
+across as `D`. Tracking finds the stoppage inside it:
+
+- Evidence is the ball out of play, or the ball at rest for at least 1 s (a set-piece tag confirms a restart nearby).
+  The first evidence frame from 10 s before to 15 s after the window start begins the stoppage.
+- `D` runs until the restart: the ball seen inside the pitch at 5 m/s or more for at least 10 frames (0.4 s), which is
+  faster than a player carrying the ball and long enough to exclude one noisy frame.
+- If no restart is found, only the evidence frames in the window become `D`. If there is no evidence, the set piece is
+  skipped.
+- `Kick Off (After Goal)`: `D` from the last ball-out frame within 120 s before the window to the restart. If there is
+  no restart, up to the window start.
+- `Kick Off (Start)` is ignored: the in-play window already covers it.
+
+Malformed events are counted as skipped and do not stop the run.
 
 ## 12. Missing ball and X
 
@@ -232,22 +269,41 @@ The results below come from a local run on 2026-11-17 with the official data bun
 
 Validation was about correctness and format. We make no accuracy claim, and aggregate label shares are not reported as accuracy.
 
-- `python -m pytest tests/ -v`: all 109 tests pass, on the pinned stack (numpy 2.1.3, pandas 2.2.3) and on
+- `python -m pytest tests/ -v`: all 130 tests pass, on the pinned stack (numpy 2.1.3, pandas 2.2.3) and on
   numpy 2.5.4 / pandas 3.0.6. They use synthetic data only. Each test file except `tests/test_module_architecture.py`
   (pytest only) also runs as a script (`python -B tests/<file>.py`). `tests/test_streaming.py`
   (`test_long_match_chunk_sizes_match_offline_engine`) runs a 5,000-frame synthetic match at chunk sizes 1, 25, 100,
   512 and 4096 and checks it against the whole-track run and `possession.predict_possession`. A short ball gap
   (over the 512 boundary), a ball gap longer than 1 s (over the 4096 boundary) and dead runs (one over the 2000 boundary) are included.
-- Not run: `evaluation/run_evaluation.py` and the public five-minute ground truth. No spellF1 or macroF1 was computed,
-  and no parameter was chosen from any score. These checks show the pipeline runs correctly and the output has the
-  right format. They do not measure prediction accuracy.
+- `tests/test_stoppages.py` (synthetic) covers the `--dead-ball` rules.
+- The checks above show the pipeline runs correctly and the output has the right format. They do not measure
+  prediction accuracy. No parameter was chosen from any score.
+- `--dead-ball tagged` on the full match (no ground truth): dead frames 46,528 (`basic`) to 57,928. Tracking rules
+  added 8,551 (still ball 2,172 frames in 22 runs; out-of-play bridge 6,379). Smart Tagging added 2,849 more. Of 57 set
+  pieces considered (the 2 `Kick Off (Start)` tags excluded), 35 were located with a restart, 1 of 4 after-goal kick
+  offs was used and 21 were skipped for lack of stoppage evidence. Label changes against `basic`: 12,174 frames (X to
+  D 9,192; H to D 1,297; A to D 911; H to X 325; A to X 449). The official validator and `verify_synx.py` reported OK,
+  chunk sizes 256, 1024, 4096 and the whole track gave 0 mismatches, and two fresh runs gave the same SHA-256
+  `67c29b1642fd7b5e348160502679cd66b397e999ceeeeb286c06a5e02b9055a0`.
+- One pre-registered public five-minute sample check per version (`evaluation/run_evaluation.py --gt public`), never
+  used to tune anything; the thresholds were fixed before it was run:
+
+  | Version | macroF1 | D F1 | spellF1 | transition F1 (+/-25 frames) |
+  |---|---|---|---|---|
+  | `basic` | 0.5511 | 0.125 | 0.4588 | 0.158 |
+  | `tagged` | 0.6697 | 0.481 | 0.4588 | 0.158 |
+
+  spellF1 and transition F1 did not move because the scorer forward-fills predicted `X` inside graded spans and treats
+  `X` and `D` alike for alive/dead. `X` frames that followed an existing `D` were already scored as `D` for spells and
+  transitions, and the new `D` mostly replaced such `X`. Five minutes (17 possessions) is not representative of the
+  full match, so there is no full-match accuracy claim.
 - `git diff --check`: clean.
 - `python evaluation/validate_submission.py outputs/workstream2/Synx.csv`: OK. 199,319 rows, frames 0..199,318, labels only
   H, A, D, X.
 - `python verify_synx.py --input ... --diagnostics ...`: OK.
 - Chunk invariance and run-to-run identity, as in section 14.
 - Re-parse of the source tracking file matched the cache (section 4).
-- The production output was byte-identical on both library stacks above
+- The `--dead-ball basic` output was byte-identical on both library stacks above
   (SHA-256 `c46a268a6bed3024405498d236b922e67a0121b66d2d5f006e16c1d77c0285fb`).
 - Integration fix: `spells.SWITCH_CONTROL_FRAMES` was `int(0.5 * 25)` = 12 while the streaming engine used by
   `run_all.py` had a literal default of 13, so `possession.predict_possession` and `run_all.py` disagreed on 1,443
@@ -257,17 +313,19 @@ Validation was about correctness and format. We make no accuracy claim, and aggr
 
 ## 16. Limitations and future work
 
-- No accuracy measurement was made. Parameters are fixed heuristics chosen from football reasoning. They were not fitted
-  or tuned on the ground truth or video.
+- No full-match accuracy measurement was made. The only score is the single public five-minute sample check in
+  section 15. Parameters are fixed heuristics chosen from football reasoning. They were not fitted or tuned on the
+  ground truth or video.
 - Control is based on distance in 2D. There is no ball height channel, so a ball passing over a player looks like control.
 - Possession needs 13 consecutive control frames to start or switch. Short real turnovers are missed.
-- Set pieces, injuries and other stoppages with the ball in play area are not marked `D`. Smart Tagging is used only
-  for optional diagnostics.
+- In `--dead-ball basic` mode, set pieces, injuries and other stoppages with the ball in play area are not marked `D`.
+- `--dead-ball tracking|tagged` (`tagged` is the default): still ball can also fire on a goalkeeper holding the ball still. In the real-data
+  run 21 of 57 set pieces were skipped for lack of stoppage evidence. A restart with a slow ball (below 5 m/s) is not
+  detected, so `D` then ends at the evidence frames. Only 1 of 4 after-goal kick offs found a ball-out frame.
 - After 25 unseen frames the label is `X`, even if play continued with the same team.
 - Slot swaps, duplicate slots on one person, and bench slots are not filtered.
 - The in-play window uses hard-coded kickoff frames and the half spans from `games.py`.
-- Future work: use Smart Tagging set-piece intervals for dead-ball detection, use ball height if it becomes available,
-  and filter duplicate and off-pitch slots.
+- Future work: use ball height if it becomes available, and filter duplicate and off-pitch slots.
 
 ## 17. Installation and reproduction
 
@@ -277,12 +335,12 @@ Python 3.12 is the version named in `requirements.txt`. The 2026-11-17 validatio
 ```bash
 python -m venv .venv            # then activate it
 pip install -r requirements.txt
-# put the official data bundle in ./data (data/tactical/BAR-ATH_tactical_atd.xml and _atd.txt) or set MTAH_DATA_DIR
+# put the official data bundle in ./data (data/tactical/BAR-ATH_tactical_atd.xml, _atd.txt and _smart_tagging.xml) or set MTAH_DATA_DIR
 python run_all.py --output Synx.csv --overwrite
 python evaluation/validate_submission.py Synx.csv
 ```
 
-Default output path without `--output` is `outputs/workstream2/Synx.csv`.
+Default output path without `--output` is `outputs/workstream2/Synx.csv`. The default run uses `--dead-ball tagged`. `--dead-ball basic` needs only the two ATD files.
 
 ## Parameter table
 
@@ -304,5 +362,14 @@ Default output path without `--output` is `outputs/workstream2/Synx.csv`.
 | Out-of-pitch margin | 0.5 m | `synx/pitch.py` (`OUT_MARGIN_M`) | Ball radius plus tracking noise |
 | Kickoff frames | 11185, 113742 | `starter/load_smart_tagging.py` | Start of each half |
 | Last in-play frames | 90,651 and 190,197 | `games.py` (`halves`, `offsets`) | End of each half |
+| Still-ball speed | 0.5 m/s | `synx/stoppages.py` (`STILL_SPEED_MS`) | Below this the ball is at rest, allowing for tracking jitter |
+| Still-ball duration | 50 frames (2 s) | `synx/stoppages.py` (`STILL_MIN_FRAMES`) | A placed ball, not a ball in open play |
+| Still-ball duration near a set-piece tag | 25 frames (1 s) | `synx/stoppages.py` (`TAGGED_STILL_MIN_FRAMES`) | 1 s is enough when a tag confirms a restart nearby |
+| Out-of-play bridge | 750 frames (30 s) | `synx/stoppages.py` (`MAX_OUT_BRIDGE_FRAMES`) | A restart normally follows the ball leaving the pitch within 30 s |
+| Restart speed | 5.0 m/s | `synx/stoppages.py` (`RESTART_SPEED_MS`) | A throw or kick moves the ball faster than a player carrying it |
+| Restart duration | 10 frames (0.4 s) | `synx/stoppages.py` (`RESTART_MIN_FRAMES`) | A single noisy frame is not a restart |
+| Set-piece look-back | 250 frames (10 s) | `synx/stoppages.py` (`TAG_LOOKBACK_FRAMES`) | The stoppage can begin shortly before the tagged window |
+| Set-piece evidence span | 375 frames (15 s) | `synx/stoppages.py` (`TAG_EVIDENCE_FRAMES`) | The stoppage must begin within the first 15 s of the window |
+| After-goal look-back | 3,000 frames (120 s) | `synx/stoppages.py` (`GOAL_LOOKBACK_FRAMES`) | A kick off after a goal follows the goal within 2 minutes |
 | Cache version | 2 | `synx/data.py` (`CACHE_VERSION`) | Forces a rebuild if the cached arrays change |
 | Default chunk size | 4096 frames | `run_all.py` | Memory use only; labels do not change |

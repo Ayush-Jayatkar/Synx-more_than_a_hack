@@ -52,7 +52,11 @@ No approach is described as more accurate based on agreement, confidence or coun
 
 ## Smart Tagging
 
-`events.load_smart_tagging_events()` calls the existing starter parser. `events.align_events()` converts half-open interval boundaries to frame arrays, clips intervals to the video, tracks unknown team values as -1, and counts malformed records. Smart Tagging phases and set-piece ranges are optional context only: they are not possession labels and do not set D or alter control without a separately reviewed integration. The command-line `--smart-tagging` option adds aligned context to the local frame report when the asset is available.
+`events.load_smart_tagging_events()` calls the existing starter parser. `events.align_events()` converts half-open interval boundaries to frame arrays, clips intervals to the video, tracks unknown team values as -1, and counts malformed records. Smart Tagging is not a source of possession labels. It does not set possession labels. `run_all.py` uses it by default (`--dead-ball tagged`) for dead-ball evidence only: set-piece tags are pointers for tracking-based stoppage detection, and team tags and phase codes are not used. The command-line `--smart-tagging` option adds aligned context to the local frame report when the asset is available.
+
+## Dead-ball option
+
+`python run_all.py --dead-ball basic|tracking|tagged` chooses the dead-ball evidence (`synx/stoppages.py`). `tagged` is the command-line default and writes the final submission; `basic` reproduces the previous submission (kept as a fallback). `tracking` adds still-ball and out-of-play-bridge evidence from the tracking data alone. `tagged` also uses Smart Tagging set-piece tags, which only say where to look: tracking decides where the stoppage starts and ends. The mask is built on the whole match before chunked inference, so labels do not depend on chunk size. Details and results are in `Synx.md` sections 11 and 15.
 
 ## Parameters
 
@@ -97,7 +101,7 @@ python synx_validate.py outputs\workstream2\Synx.csv
 
 ## Competition compliance and limitations
 
-The local command uses tracking only to generate predictions and engineering diagnostics; it never loads possession ground truth or video. Do not upload tracking, events, caches, reports or predictions to hosted services. Do not commit match data, caches, generated CSVs, or local reports. No real-match accuracy claim is made. Approach speed may be distorted by nearest-tracklet changes, ball velocity can be noisy, automatic event phases can be wrong, and the state model introduces confirmation latency. Smart Tagging remains optional and does not influence labels pending a separate, permitted review.
+The local command uses tracking only to generate predictions and engineering diagnostics; it never loads possession ground truth or video. Do not upload tracking, events, caches, reports or predictions to hosted services. Do not commit match data, caches, generated CSVs, or local reports. No real-match accuracy claim is made. Approach speed may be distorted by nearest-tracklet changes, ball velocity can be noisy, automatic event phases can be wrong, and the state model introduces confirmation latency. Smart Tagging is used only for dead-ball evidence in the default `tagged` mode; `--dead-ball basic` or `tracking` does not read it.
 
 ## Workstream handoff
 

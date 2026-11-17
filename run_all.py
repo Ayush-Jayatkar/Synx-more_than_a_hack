@@ -5,7 +5,8 @@ import os
 import numpy as np
 import pandas as pd
 
-from synx import approaches, data, diagnostics, events, possession, possession_features, spells, streaming
+from synx import (approaches, data, diagnostics, events, possession, possession_features, spells,
+                  stoppages, streaming)
 
 ROOT = os.path.dirname(os.path.abspath(__file__))
 DEFAULT_OUTPUT = os.path.join(ROOT, "outputs", "workstream2", "Synx.csv")
@@ -27,6 +28,10 @@ def build_parser():
                         help="add optional Smart Tagging context to a local diagnostic report")
     parser.add_argument("--output", default=DEFAULT_OUTPUT,
                         help="exact path for the official frame,label submission CSV")
+    parser.add_argument("--dead-ball", choices=stoppages.MODES, default="tagged",
+                        help="dead-ball evidence: basic (half windows and ball out), tracking "
+                             "(adds still-ball and out-of-play bridge), tagged (adds Smart Tagging "
+                             "set pieces located by tracking; reads the Smart Tagging XML)")
     parser.add_argument("--overwrite", action="store_true",
                         help="allow replacing an existing submission or diagnostic sidecar")
     return parser
@@ -69,14 +74,14 @@ def _write_event_diagnostics(path, track, labels, dead, event_context):
     )
 
 
-def run(track, output, chunk_size=4096, overwrite=False, event_context=None):
+def run(track, output, chunk_size=4096, overwrite=False, event_context=None, dead=None):
     """Run inference and write output, optionally adding an event-context sidecar."""
     output = os.path.abspath(output)
     diagnostic_path = os.path.join(os.path.dirname(output), "frame_diagnostics.csv")
     paths = [output] + ([diagnostic_path] if event_context is not None else [])
     _assert_writable(paths, overwrite)
 
-    dead = possession.default_dead_mask(track)
+    dead = possession.default_dead_mask(track) if dead is None else dead
     labels = predict(track, chunk_size=chunk_size, dead=dead)
     write_submission(output, labels)
     if event_context is not None:
@@ -89,10 +94,14 @@ def main(argv=None):
     args = build_parser().parse_args(argv)
     track = data.load()
     event_context = None
-    if args.smart_tagging:
+    raw_events = None
+    if args.smart_tagging or args.dead_ball == "tagged":
         raw_events = events.load_smart_tagging_events()
+    if args.smart_tagging:
         event_context = events.align_events(raw_events, len(track["ball"]))
-    labels = run(track, args.output, args.chunk_size, args.overwrite, event_context)
+    dead, report = stoppages.dead_mask(track, args.dead_ball, raw_events)
+    print("Dead-ball evidence: {}".format(report))
+    labels = run(track, args.output, args.chunk_size, args.overwrite, event_context, dead)
     print("Submission saved: {}".format(os.path.abspath(args.output)))
     if event_context is not None:
         print("Diagnostics saved: {}".format(

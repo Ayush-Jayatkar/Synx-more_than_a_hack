@@ -26,6 +26,7 @@ synx/data.py             parse ATD, convert to metres, cache (cache/BAR-ATH_trac
         |
         v
 synx/possession.py       dead-ball mask D (synx/pitch.py: half windows, ball beyond pitch lines)
+synx/stoppages.py        optional extra D evidence, chosen with --dead-ball (command-line default tagged)
 synx/possession_features.py   nearest-player distances, ball motion, approach speed
         |
         v
@@ -42,8 +43,9 @@ run_all.py  ->  outputs/workstream2/Synx.csv   (frame,label)
 `run_all.py` calls `streaming.predict_chunked`. `synx.possession.predict_possession` is the same engine as a
 library call and gives the same labels.
 
-Optional, not needed for the submission:
+Options:
 
+- `--dead-ball` chooses the stoppage evidence added to D (section 8). The command-line default is `tagged`, which writes the final submission. `--dead-ball basic` reproduces the previous submission.
 - `--smart-tagging` also writes a diagnostics CSV (`frame_diagnostics.csv`) next to the output. It does not change labels.
 - `interfaces.py` and `modules/` are offline helpers (module contract, probability adapter, nearest-player
   baseline). `run_all.py` does not use them. From `starter/`, the pipeline uses only `team_of_each_track`
@@ -127,14 +129,15 @@ export MTAH_DATA_DIR=/path/to/mtah2027          # Linux / macOS
 $env:MTAH_DATA_DIR = "D:\mtah2027"              # Windows PowerShell
 ```
 
-The default run reads these two files:
+The default run (`--dead-ball tagged`) reads these three files:
 
 ```text
 <data dir>/tactical/BAR-ATH_tactical_atd.xml
 <data dir>/tactical/BAR-ATH_tactical_atd.txt
+<data dir>/tactical/BAR-ATH_tactical_smart_tagging.xml
 ```
 
-`--smart-tagging` additionally reads `<data dir>/tactical/BAR-ATH_tactical_smart_tagging.xml`.
+`--dead-ball basic` or `--dead-ball tracking` needs only the two ATD files. `--smart-tagging` also reads the Smart Tagging XML.
 Homography, video and the `broadcast/` folder are not read.
 
 The first run parses the ATD and writes `cache/BAR-ATH_tracking.npz`. The cache is rebuilt automatically when the
@@ -146,7 +149,7 @@ source file size or modification time changes, or when `CACHE_VERSION` in `synx/
 python run_all.py
 ```
 
-Writes `outputs/workstream2/Synx.csv`. An existing output is not replaced unless `--overwrite` is given.
+Writes `outputs/workstream2/Synx.csv` (the tagged submission, SHA-256 `67c29b1642fd7b5e348160502679cd66b397e999ceeeeb286c06a5e02b9055a0`). An existing output is not replaced unless `--overwrite` is given.
 
 Options (from `run_all.py`):
 
@@ -156,6 +159,19 @@ Options (from `run_all.py`):
 | `--overwrite` | off | allow replacing an existing output / diagnostics file |
 | `--chunk-size N` | 4096 | frames per streaming chunk (does not change the labels) |
 | `--smart-tagging` | off | also write `frame_diagnostics.csv` in the output folder |
+| `--dead-ball MODE` | `tagged` | `basic`, `tracking` or `tagged` (see below) |
+
+`--dead-ball` chooses the dead-ball (`D`) evidence:
+
+- `basic`: half windows and ball beyond the pitch lines. Output is byte-identical to the previous submission, kept as a
+  fallback (SHA-256 `c46a268a6bed3024405498d236b922e67a0121b66d2d5f006e16c1d77c0285fb`).
+- `tracking`: `basic` plus tracking-only evidence. Still ball: the ball is seen with filtered speed below 0.5 m/s for
+  at least 2 s. Out-of-play bridge: unseen frames right after a frame where the ball was seen out, for at most 30 s.
+- `tagged` (default, final submission): `tracking` plus Smart Tagging set pieces. It reads `data/tactical/BAR-ATH_tactical_smart_tagging.xml`.
+
+Only the command-line default changed: library calls (`run_all.predict`, `run_all.run`, `possession.predict_possession`) with no dead mask still use the basic mask. A missing ball alone never becomes `D`. The mask is built on the
+whole match before chunked inference, so labels do not depend on `--chunk-size`. The rules are in `synx/stoppages.py`
+and Synx.md section 11.
 
 ## 9. Regenerate Synx.csv
 
@@ -168,6 +184,9 @@ Other examples:
 ```bash
 python run_all.py --chunk-size 1024
 python run_all.py --smart-tagging --overwrite   # also writes outputs/workstream2/frame_diagnostics.csv
+python run_all.py --dead-ball basic --overwrite   # previous submission, needs only the two ATD files
+python run_all.py --dead-ball tracking --overwrite
+python run_all.py --dead-ball tagged --overwrite   # same as the default; needs the Smart Tagging XML locally
 ```
 
 `Synx.csv` in the repository root is gitignored, like everything under `outputs/`.
@@ -188,6 +207,7 @@ python -B tests/test_pipeline.py
 python -B tests/test_possession_features.py
 python -B tests/test_probability_module.py
 python -B tests/test_streaming.py
+python -B tests/test_stoppages.py
 git diff --check
 ```
 
@@ -197,6 +217,7 @@ git diff --check
 | `test_possession_features.py` | nearest / second-nearest distances, speeds, approach speed, discontinuity filter |
 | `test_pipeline.py` | control evidence, state machine, hysteresis, dead ball, missing-ball grace |
 | `test_streaming.py` | chunked engine: identical labels for any chunk size, state carried across chunk boundaries, runner CLI |
+| `test_stoppages.py` | still ball, out-of-play bridge, Smart Tagging set-piece windows and restarts, malformed events, mode handling (synthetic) |
 | `test_probability_module.py`, `test_module_architecture.py` | optional offline helpers in `interfaces.py` and `modules/` |
 
 `test_long_match_chunk_sizes_match_offline_engine` in `test_streaming.py` runs a 5,000-frame synthetic match at
@@ -212,7 +233,7 @@ python synx_validate.py outputs/workstream2/Synx.csv
 python verify_synx.py --input outputs/workstream2/Synx.csv --diagnostics outputs/workstream2/frame_diagnostics.csv
 ```
 
-Reproducibility checks (labels must not depend on chunk size; two runs must be byte-identical):
+Reproducibility checks (labels must not depend on chunk size; two runs must be byte-identical). These use the default, so they produce the tagged output:
 
 ```bash
 python run_all.py --chunk-size 256  --output outputs/chunk256.csv  --overwrite
@@ -225,7 +246,7 @@ python run_all.py --output outputs/hash_run2.csv --overwrite
 (Get-FileHash .\outputs\hash_run1.csv).Hash -eq (Get-FileHash .\outputs\hash_run2.csv).Hash
 ```
 
-Both lines print `True`.
+Both lines print `True`. The default output hash is `67c29b1642fd7b5e348160502679cd66b397e999ceeeeb286c06a5e02b9055a0`.
 
 Structural check of the CSV (expect 199319 rows, columns `['frame', 'label']`, labels H/A/D/X only, 0 duplicates,
 0 nulls, frames 0 to 199318):
@@ -246,15 +267,39 @@ What these checks show:
 - The validators and the structural check confirm the output format.
 - The chunk and hash checks confirm the output is reproducible.
 - None of them measures prediction accuracy. `evaluation/run_evaluation.py` and the ground truth are not part of
-  this workflow. No spellF1 or macroF1 was computed, and no parameter was chosen from a score.
+  this workflow. No parameter was chosen from a score. The only accuracy numbers are the one-time public sample
+  check below.
 
 Last local run (2026-11-17, Python 3.13.7, numpy 2.1.3, pandas 2.2.3):
 
-- 109 tests passed, and every test script exited with code 0.
+- 130 tests passed.
 - The official validator reported OK.
 - `verify_synx.py` completed.
 - Chunk sizes 256, 1024, 4096 and the whole track gave identical labels, and two fresh runs gave identical files.
-- `outputs/workstream2/Synx.csv` SHA-256: `c46a268a6bed3024405498d236b922e67a0121b66d2d5f006e16c1d77c0285fb`.
+- `python run_all.py --dead-ball basic` SHA-256 (previous submission, kept as fallback): `c46a268a6bed3024405498d236b922e67a0121b66d2d5f006e16c1d77c0285fb`.
+
+Real-data run of the default `--dead-ball tagged` (full match, no ground truth):
+
+- Dead frames 46,528 (`basic`) to 57,928. Tracking rules added 8,551 (still ball 2,172 frames in 22 runs;
+  out-of-play bridge 6,379). Smart Tagging added 2,849 more.
+- Of 57 set pieces considered (the 2 `Kick Off (Start)` tags are excluded), 35 were located with a restart, 1 of 4
+  after-goal kick offs was used and 21 were skipped for lack of stoppage evidence.
+- Label changes against `basic`: 12,174 frames (X to D 9,192; H to D 1,297; A to D 911; H to X 325; A to X 449).
+- Official validator OK, `verify_synx.py` OK, chunk sizes 256, 1024, 4096 and the whole track gave 0 mismatches, and
+  two fresh runs gave the same SHA-256: `67c29b1642fd7b5e348160502679cd66b397e999ceeeeb286c06a5e02b9055a0`.
+
+Public five-minute sample check, run once per version with `evaluation/run_evaluation.py --gt public`. It was never
+used to tune anything, and the thresholds were fixed before it was run:
+
+| Version | macroF1 | D F1 | spellF1 | transition F1 (+/-25 frames) |
+|---|---|---|---|---|
+| `basic` | 0.5511 | 0.125 | 0.4588 | 0.158 |
+| `tagged` | 0.6697 | 0.481 | 0.4588 | 0.158 |
+
+spellF1 and transition F1 did not move because the scorer forward-fills predicted `X` inside graded spans and treats
+`X` and `D` alike for alive/dead. `X` frames that followed an existing `D` were already scored as `D` for spells and
+transitions, and the new `D` mostly replaced such `X`. Five minutes (17 possessions) is not representative of the
+full match. There is no full-match accuracy claim.
 
 ## 11. Output format
 
@@ -266,6 +311,9 @@ video frame index. `label` is one of `H`, `A`, `D`, `X` (see section 1). Frame `
 - Match data is input only. No training, fitting or tuning on ground truth or video.
 - Do not compare output with the video and do not hand-label frames.
 - Do not paste or upload match data, screenshots or extracts into AI tools or hosted services.
+- Smart Tagging is an allowed input: the official starter kit (`starter/load_smart_tagging.py`,
+  `starter/03_first_submission.ipynb`) recommends set pieces as dead-ball evidence, and the team confirmed it.
+  The default `--dead-ball tagged` uses it. The XML is match data and is never committed.
 - `data/`, `cache/`, `outputs/`, `evaluation/gt/`, `*.npz`/`*.pkl` caches, videos, `.atd` and `.xml` files stay out of Git.
 - Ground truth (`evaluation/gt/`) is kept locally only. The pipeline never reads it.
 
